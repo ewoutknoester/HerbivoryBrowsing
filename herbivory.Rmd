@@ -8,13 +8,13 @@ output: html_document
 # Set R and packages
 ```{r setup}
 rm(list=ls()) # Clear workspace
-setwd(dirname(rstudioapi::getActiveDocumentContext()$path)) #Set directory at current directory
+knitr::opts_knit$set(root.dir = '/tmp') #Set directory at current directory for all subsequent chunks
 
 library(lme4)
 library(lattice) #QQ-plots
 library(plyr)
 library(tidyverse) # Data manipulation and plotting
-library(jtools) #for transformaing model summaries
+library(jtools) #for transforming model summaries
 library(effects) #for plotting parameter effects
 library(betareg) # Beta regression
 library(lmtest) # likelihood testing
@@ -29,10 +29,10 @@ library(rstan)
 # Load & organize data
 <!--
 Data info:
-  Data collected by Veerle plug
+  Data collected by Veerle Plug
   Grazing (%) calculated as: Weight(out)/(Weight(in)*(1-Weight_control))
   Weight = wet weight of macrophyte (shaken 10 times)
-  Weigth_control = grazing on control (caged) structures, calculated for each location x macrophyte combination.
+  Weight_control = biomass loss on caged structures, calculated for each location x macrophyte combination.
   Weight_control on average 19%
   Weight_control was 1 of the 11 structures, randomly chosen. Not included in this dataset
   Grazing > 100 was set to 100 and grazing < 0 was set to 0
@@ -40,67 +40,24 @@ Data info:
 -->
 
 ```{r data loading}
-Assays <- read.csv("Assays.csv", check.names = FALSE, header = TRUE)
-Assays$ID <- factor(Assays$ID)
-Assays$Assay <- factor(Assays$Assay)
-Assays$Structure <- factor(Assays$Structure)
-Assays$Location <- factor(Assays$Location)
-Assays$Date <- factor(Assays$Date)
-Assays$Species <- factor(Assays$Species)
+Assays <- read.csv("Assays.csv", check.names = FALSE, header = TRUE, colClasses = c(ID = "factor", 
+          Assay = "factor", Structure = "factor", Location = "factor", Date = "factor", Species = "factor"))
 
 # Insert new columns for Protection and fill based on study site
 Assays <- as.data.frame(append(Assays,list(Protection = ""),after = 4))
 
-# Appoint Protection status to each Location
-Assays$Protection <- ifelse(
-  Assays$Location %in% c("Firefly", "Pilli Pipa"),"Fishing",
+Assays$Protection <- ifelse(Assays$Location %in% c("Firefly", "Pilli Pipa"),"Fishing",
   ifelse(Assays$Location %in% c("Dolphin Point", "Lower Mpunguti"), "Reserve", "No-take"))
 
+Assays$Protection <- factor(Assays$Protection)
+
 # Transform percentages to fractions
-Assays <- as.data.frame(append(Assays,list(Grazing.fraction = ""),after = 9))
-Assays$Grazing.fraction <- Assays$Grazing/100
+Assays <- as.data.frame(append(Assays,list(Grazing.fraction = Assays$Grazing/100),after = 9))
 
-```
+# Remove Thalassia (seagrass, not a macroalgae)
+Assays <- subset(Assays, Species == "Padina" | Species == "Sargassum")
+Assays$Species <- factor(Assays$Species)
 
-# Data inspection
-```{r data inspection}
-str(Assays) # Check variables
-summary(Assays) # Check data
-
-# Check missing data
-Assays %>%
-  summarise_each(list(~sum(is.na(.)))) %>%
-  gather()
-
-# Plotting Grazing across Assay nested within Location and Protection
-ggplot() +
-  geom_point(aes(x = Assay, y = Grazing), data = Assays) +
-  facet_grid(. ~ Protection + Location, switch = "x") +
-  theme(
-    axis.text.x = element_text(size = 11),
-    axis.text.y = element_text(size = 11),
-    axis.title.y = element_text(size = 11),
-    axis.title.x = element_text(size = 11),
-    panel.background = element_rect(fill = "white", colour = NA),
-    panel.border = element_rect(fill = NA, colour = "grey50"),
-    panel.grid.major = element_line(colour = "grey90", size = 0.2),
-    panel.grid.minor = element_line(colour = "grey98", size = 0.5),
-    strip.background = element_rect(fill = "grey80", colour = "grey50"),
-    legend.text = element_text(size = 11),
-    strip.text.x = element_text(size = 11)
-  ) +
-  ylab("Grazing (%)") +
-  xlab("Survey")
-
-```
-<!--
-Data observations:
-  Data bounded between 0 and 100: not suited for normal linear models
-  Variance seems equal
--->
-
-# Pooled analysis
-```{r pooled model}
 # Averaging values across assay structures
 Assays.avg <- ddply(Assays, ~Assay+Species, summarise, Grazing.mean = mean(Grazing) / 100, Protection = Protection[1], Location = Location[1])
 
@@ -110,69 +67,110 @@ transform01 <- function(x) {
 }
 Assays.avg$Grazing.scaled <- transform01(Assays.avg$Grazing.mean)
 
+```
+
+# Data inspection
+```{r data inspection}
+summary(Assays) # Check data
+
+# Check missing data: no missing data
+Assays %>%
+  summarise_each(list(~sum(is.na(.)))) %>%
+  gather()
+
+# Histogram of all grazing data to check for distribution
+hist(Assays$Grazing)
+
+# Boxplots of Grazing split per Protection, Location and Species
+boxplot(Grazing ~ Protection, varwidth = TRUE, data = Assays)
+boxplot(Grazing ~ Location, varwidth = TRUE, data = Assays)
+boxplot(Grazing ~ Species, varwidth = TRUE, data = Assays)
+
+# Plotting Grazing across Assay nested within Location and Protection
+ggplot() +
+  geom_point(aes(x = Assay, y = Grazing), data = Assays) +
+  facet_grid(. ~ Protection + Location, switch = "x") +
+  theme(
+    axis.text.x = element_text(size = 11), axis.text.y = element_text(size = 11),
+    axis.title.x = element_text(size = 11), axis.title.y = element_text(size = 11),
+    panel.background = element_rect(fill = "white", colour = NA),
+    panel.border = element_rect(fill = NA, colour = "grey50"),
+    panel.grid.major = element_line(colour = "grey90", size = 0.2),
+    panel.grid.minor = element_line(colour = "grey98", size = 0.5),
+    strip.background = element_rect(fill = "grey80", colour = "grey50"),
+    legend.text = element_text(size = 11), strip.text.x = element_text(size = 11)
+  ) +
+  ylab("Grazing (%)") + xlab("Survey")
+```
+
+### TODO: Analysis also on LOCATION as fixed factor?? See if this is necessary for the article!
+
+# Pooled*Nested model
+<!--
+Data observations:
+  Data bounded between 0 and 100: not suited for normal linear models;
+  Pooled model (archive) invalid because of independency;
+  Full nested model (Location/Assay) could not be fitted properly (archive)
+  A pooling across Assays (i.e. average of 10 lines) was used for analysis, and this was nested within Location
+-->
+## Pooled*Nested model selection
+```{r nested model selection}
+
 # Null model
-bm.null <- betareg(Grazing.scaled ~ 1, data = Assays.avg)
+glm.null <- glmmTMB(Grazing.scaled ~ 1, data = Assays.avg, family = list(family = "beta", link = "logit"))
 
-# Model 1
-bm.1 <- betareg(Grazing.scaled ~ Protection, data = Assays.avg) 
-summary(bm.1)
+# Full model
+glm.1 <- glmmTMB(Grazing.scaled ~ Protection*Species, data = Assays.avg, family = list(family = "beta", link = "logit"))
 
-# Likelihood testing: bm.1 significantly improves over bm.null model
-lrtest(bm.1, bm.null)
-AIC(bm.1, bm.null)
+# Incorporating nested structure
+glm.1a <- glmmTMB(Grazing.scaled ~ Protection*Species + (1 | Location), data = Assays.avg, family = list(family = "beta", link = "logit"))
 
+AIC(glm.1, glm.1a) # Nested structure (glm.1a) improves model performance
+
+# Allowing for variable precision using full nested model
+glm.2a <- glmmTMB(Grazing.scaled ~ Protection*Species + (1 | Location), data = Assays.avg, family = list(family = "beta", link = "logit"), dispformula = ~ Location)
+glm.2b <- glmmTMB(Grazing.scaled ~ Protection*Species + (1 | Location), data = Assays.avg, family = list(family = "beta", link = "logit"), dispformula = ~ Species)
+glm.2c <- glmmTMB(Grazing.scaled ~ Protection*Species + (1 | Location), data = Assays.avg, family = list(family = "beta", link = "logit"), dispformula = ~ Protection)
+glm.2d <- glmmTMB(Grazing.scaled ~ Protection*Species + (1 | Location), data = Assays.avg, family = list(family = "beta", link = "logit"), dispformula = ~ Location*Species)
+glm.2e <- glmmTMB(Grazing.scaled ~ Protection*Species + (1 | Location), data = Assays.avg, family = list(family = "beta", link = "logit"), dispformula = ~ Species*Protection)
+
+AIC(glm.1a, glm.2a, glm.2b, glm.2c, glm.2d, glm.2e) # Species*Protection (glm.2e) has greatest improvements
+
+# Model selection
+glm.3a <- glmmTMB(Grazing.scaled ~ Protection + (1 | Location), data = Assays.avg, family = list(family = "beta", link = "logit"), dispformula = ~ Species*Protection)
+glm.3b <- glmmTMB(Grazing.scaled ~ Species + (1 | Location), data = Assays.avg, family = list(family = "beta", link = "logit"), dispformula = ~ Species*Protection)
+glm.3c <- glmmTMB(Grazing.scaled ~ Protection+Species + (1 | Location), data = Assays.avg, family = list(family = "beta", link = "logit"), dispformula = ~ Species*Protection)
+glm.3d <- glmmTMB(Grazing.scaled ~ Protection*Species + (1 | Location), data = Assays.avg, family = list(family = "beta", link = "logit"), dispformula = ~ Species*Protection)
+
+AIC(glm.3a, glm.3b, glm.3c, glm.3d) # Model with interaction (glm.3d) best fit, model without (glm.3d) close
+lrtest(glm.3c, glm.3d) # Difference not significant, but choosing based on AIC
+
+# Final model for pooled*nested data, including interaction and variable precision:
+glm.4 <- glmmTMB(Grazing.scaled ~ Protection*Species + (1 | Location), data = Assays.avg, family = list(family = "beta", link = "logit"), dispformula = ~ Species*Protection)
+
+summary(glm.4)
 ```
 
-## Compare predictions versus observed data
-```{r predictions pooled model}
-dbeta2 <- function(X, mu, phi, ...) {
-  dbeta(X, shape1 = mu * phi, shape2 = (1 - mu) * phi, ...)
-}
-
-rbeta2 <- function(N, mu, phi, ...) {
-  rbeta(N, shape1 = mu * phi, shape2 = (1 - mu) * phi, ...)
-}
-
-# extract coefficients of beta regression model
-coefs.bm.1 <- coef(bm.1)
-
-# create vector spanning the transformed 0-1 interval
-n.bm.1 <- length(fitted(bm.1))
-x.range <- seq(0.5/n.bm.1 , 1-0.5/n.bm.1 , length.out = 200)
-x.range.bt <- (x.range*n.bm.1 - 0.5)/(n.bm.1-1)
-
-# control
-plot(x.range.bt, dbeta2(x.range, inv.logit(coefs.bm.1["(Intercept)"]), coefs.bm.1["(phi)"]), col = "blue",
-     type = "l",  lwd = 2,
-     ylab = "Probability density", xlab = "Grazing",
-     ylim=c(0,5)
-)
-
-# No-take
-lines(x.range.bt, dbeta2(x.range, inv.logit(coefs.bm.1["(Intercept)"] + coefs.bm.1[2]), coefs.bm.1["(phi)"]),lwd = 2, col = "red")
-
-# Reserve
-lines(x.range.bt, dbeta2(x.range, inv.logit(coefs.bm.1["(Intercept)"] + coefs.bm.1[3]), coefs.bm.1["(phi)"]), col = "orange", lwd = 2)
-
-rug(Assays.avg$Grazing.mean[Assays.avg$Protection=="Fishing"],col="blue", lwd=1.5, pos=5)
-rug(Assays.avg$Grazing.mean[Assays.avg$Protection=="Reserve"], col="orange", pos = 4.75, side = 3, lwd=1.5)
-rug(Assays.avg$Grazing.mean[Assays.avg$Protection=="No-take"],col="red", pos=4.5, side = 3,lwd=1.5)
-
-legend("topright", lwd = 2, lty = c(1, 1, 1), col = c("blue", "orange", "red"), legend = c("Fishing", "Reserve", "No-take"), bty = "n")
-
-```
-
-## Checking model fit
+## Pooled*Nested model validation
 ```{r}
-# Check residuals
-plot(resid(bm.1) ~ fitted(bm.1))
+# Dharma checks, see: https://cran.r-project.org/web/packages/DHARMa/vignettes/DHARMa.html
+mod <- glm.4
+modOutput <- simulateResiduals(fittedModel = mod, plot = F)
 
+op <- par(mfrow = c(2, 3), mar = c(5, 4, 1, 2))
+plotResiduals(modOutput, quantreg = T, quantiles = 0.5, rank = T, smoothScatter = F)
+testDispersion(modOutput)
+testUniformity(modOutput)
+plotResiduals(modOutput, form = Assays.avg$Protection)
+plotResiduals(modOutput, form = Assays.avg$Species)
+abline(0,0)
+plot(fitted(mod) ~ Assays.avg$Grazing.scaled)
+par(op)
 
 ```
 
-## Post hoc
+## Pooled*Nested Post hoc
 ```{r}
-test(pairs(emmeans(bm.1, ~ Protection, mode = "link")))
+test(pairs(emmeans(glm.3d, ~ Protection | Species, mode = "link")))
 ```
 
-# TO DO: Beta + Nested structure
