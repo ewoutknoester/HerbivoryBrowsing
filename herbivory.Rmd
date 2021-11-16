@@ -10,20 +10,33 @@ output: html_document
 rm(list=ls()) # Clear workspace
 knitr::opts_knit$set(root.dir = '/tmp') #Set directory at current directory for all subsequent chunks
 
-library(lme4)
-library(lattice) #QQ-plots
-library(plyr)
+library(plyr) # join (vlookup)
 library(tidyverse) # Data manipulation and plotting
-library(jtools) #for transforming model summaries
-library(effects) #for plotting parameter effects
+library(grid) # Double x-axis plots
+library(ggthemes) # pretty plots
 library(betareg) # Beta regression
+library(glmmTMB) # Nested beta regression
+library(DHARMa) # Nested model validation
 library(lmtest) # likelihood testing
-library(glmmTMB) # Beta regression
-library(boot) # Inverse logit
 library(emmeans) # Pairwise comparisons
-library(mvtnorm) # Simulations
-library(nlme)
+library(car) # ANOVA results GLM
 library(rstan)
+library(NCmisc) # Check packages used
+
+# Function to facilitate averaging dataset
+data_summary <- function(data, varname, groupnames){
+  require(plyr)
+  summary_func <- function(x, col){
+    c(mean = mean(x[[col]], na.rm=TRUE),
+      sd = sd(x[[col]], na.rm=TRUE),
+      n  = length(x[[col]]),
+      se = sd(x[[col]], na.rm=TRUE)/sqrt(length(x)))
+  }
+  data_sum<-ddply(data, groupnames, .fun=summary_func,
+                  varname)
+  data_sum <- plyr::rename(data_sum, c("mean" = varname))
+ return(data_sum)
+}
 ```
 
 # Load & organize data
@@ -46,17 +59,22 @@ Assays <- read.csv("Assays.csv", check.names = FALSE, header = TRUE, colClasses 
 # Insert new columns for Protection and fill based on study site
 Assays <- as.data.frame(append(Assays,list(Protection = ""),after = 4))
 
-Assays$Protection <- ifelse(Assays$Location %in% c("Firefly", "Pilli Pipa"),"Fishing",
+Assays$Protection <- ifelse(Assays$Location %in% c("Firefly", "Pilli Pipa"),"Fished",
   ifelse(Assays$Location %in% c("Dolphin Point", "Lower Mpunguti"), "Reserve", "No-take"))
-
 Assays$Protection <- factor(Assays$Protection)
+Assays$Protection <- ordered(Assays$Protection, levels = c("Fished", "Reserve", "No-take"))
+Assays$Species <- ordered(Assays$Species, levels = c("Sargassum", "Padina", "Thalassia"))
+
+# Change Location names to numbers
+Assays$Location <- ifelse(Assays$Location %in% c("Firefly"),"1",
+                   ifelse(Assays$Location %in% c("Pilli Pipa"),"2",
+                   ifelse(Assays$Location %in% c("Lower Mpunguti"),"3",
+                   ifelse(Assays$Location %in% c("Dolphin Point"),"4",
+                   ifelse(Assays$Location %in% c("Kisite"), "5", "6")))))
+Assays$Location <- factor(Assays$Location)
 
 # Transform percentages to fractions
 Assays <- as.data.frame(append(Assays,list(Grazing.fraction = Assays$Grazing/100),after = 9))
-
-# Remove Thalassia (seagrass, not a macroalgae)
-Assays <- subset(Assays, Species == "Padina" | Species == "Sargassum")
-Assays$Species <- factor(Assays$Species)
 
 # Averaging values across assay structures
 Assays.avg <- ddply(Assays, ~Assay+Species, summarise, Grazing.mean = mean(Grazing) / 100, Protection = Protection[1], Location = Location[1])
@@ -103,18 +121,17 @@ ggplot() +
   ylab("Grazing (%)") + xlab("Survey")
 ```
 
-### TODO: Analysis also on LOCATION as fixed factor?? See if this is necessary for the article!
-
-# Pooled*Nested model
+# Pooled*Nested model (Protection)
 <!--
 Data observations:
   Data bounded between 0 and 100: not suited for normal linear models;
   Pooled model (archive) invalid because of independency;
   Full nested model (Location/Assay) could not be fitted properly (archive)
   A pooling across Assays (i.e. average of 10 lines) was used for analysis, and this was nested within Location
+  
 -->
-## Pooled*Nested model selection
-```{r nested model selection}
+## Pooled*Nested model (Protection) selection
+```{r pooled*nested model (protection) selection}
 
 # Null model
 glm.null <- glmmTMB(Grazing.scaled ~ 1, data = Assays.avg, family = list(family = "beta", link = "logit"))
@@ -124,36 +141,39 @@ glm.1 <- glmmTMB(Grazing.scaled ~ Protection*Species, data = Assays.avg, family 
 
 # Incorporating nested structure
 glm.1a <- glmmTMB(Grazing.scaled ~ Protection*Species + (1 | Location), data = Assays.avg, family = list(family = "beta", link = "logit"))
+glm.1b <- glmmTMB(Grazing.scaled ~ Protection*Species + (1 | Location/Assay), data = Assays.avg, family = list(family = "beta", link = "logit"))
 
-AIC(glm.1, glm.1a) # Nested structure (glm.1a) improves model performance
+AIC(glm.null, glm.1, glm.1a, glm.1b) # Full nested structure (glm.1b) best model and deals with independence of Location with Protection and Species within Assay
 
 # Allowing for variable precision using full nested model
-glm.2a <- glmmTMB(Grazing.scaled ~ Protection*Species + (1 | Location), data = Assays.avg, family = list(family = "beta", link = "logit"), dispformula = ~ Location)
-glm.2b <- glmmTMB(Grazing.scaled ~ Protection*Species + (1 | Location), data = Assays.avg, family = list(family = "beta", link = "logit"), dispformula = ~ Species)
-glm.2c <- glmmTMB(Grazing.scaled ~ Protection*Species + (1 | Location), data = Assays.avg, family = list(family = "beta", link = "logit"), dispformula = ~ Protection)
-glm.2d <- glmmTMB(Grazing.scaled ~ Protection*Species + (1 | Location), data = Assays.avg, family = list(family = "beta", link = "logit"), dispformula = ~ Location*Species)
-glm.2e <- glmmTMB(Grazing.scaled ~ Protection*Species + (1 | Location), data = Assays.avg, family = list(family = "beta", link = "logit"), dispformula = ~ Species*Protection)
+glm.2a <- glmmTMB(Grazing.scaled ~ Protection*Species + (1 | Location/Assay), data = Assays.avg, family = list(family = "beta", link = "logit"), dispformula = ~ Location)
+glm.2b <- glmmTMB(Grazing.scaled ~ Protection*Species + (1 | Location/Assay), data = Assays.avg, family = list(family = "beta", link = "logit"), dispformula = ~ Species)
+glm.2c <- glmmTMB(Grazing.scaled ~ Protection*Species + (1 | Location/Assay), data = Assays.avg, family = list(family = "beta", link = "logit"), dispformula = ~ Protection)
+glm.2d <- glmmTMB(Grazing.scaled ~ Protection*Species + (1 | Location/Assay), data = Assays.avg, family = list(family = "beta", link = "logit"), dispformula = ~ Location*Species)
+glm.2e <- glmmTMB(Grazing.scaled ~ Protection*Species + (1 | Location/Assay), data = Assays.avg, family = list(family = "beta", link = "logit"), dispformula = ~ Species*Protection)
 
-AIC(glm.1a, glm.2a, glm.2b, glm.2c, glm.2d, glm.2e) # Species*Protection (glm.2e) has greatest improvements
+AIC(glm.1a, glm.2a, glm.2b, glm.2c, glm.2d, glm.2e) # Species*Protection (glm.2e) has greatest improvements, but only Protection (glm.2c) chosen to prevent no-convergence problems in model selection (below)
 
 # Model selection
-glm.3a <- glmmTMB(Grazing.scaled ~ Protection + (1 | Location), data = Assays.avg, family = list(family = "beta", link = "logit"), dispformula = ~ Species*Protection)
-glm.3b <- glmmTMB(Grazing.scaled ~ Species + (1 | Location), data = Assays.avg, family = list(family = "beta", link = "logit"), dispformula = ~ Species*Protection)
-glm.3c <- glmmTMB(Grazing.scaled ~ Protection+Species + (1 | Location), data = Assays.avg, family = list(family = "beta", link = "logit"), dispformula = ~ Species*Protection)
-glm.3d <- glmmTMB(Grazing.scaled ~ Protection*Species + (1 | Location), data = Assays.avg, family = list(family = "beta", link = "logit"), dispformula = ~ Species*Protection)
+glm.3a <- glmmTMB(Grazing.scaled ~ Protection + (1 | Location/Assay), data = Assays.avg, family = list(family = "beta", link = "logit"), dispformula = ~ Protection)
+glm.3b <- glmmTMB(Grazing.scaled ~ Species + (1 | Location/Assay), data = Assays.avg, family = list(family = "beta", link = "logit"), dispformula = ~ Protection)
+glm.3c <- glmmTMB(Grazing.scaled ~ Protection+Species + (1 | Location/Assay), data = Assays.avg, family = list(family = "beta", link = "logit"), dispformula = ~ Protection)
+glm.3d <- glmmTMB(Grazing.scaled ~ Protection*Species + (1 | Location/Assay), data = Assays.avg, family = list(family = "beta", link = "logit"), dispformula = ~ Protection)
 
-AIC(glm.3a, glm.3b, glm.3c, glm.3d) # Model with interaction (glm.3d) best fit, model without (glm.3d) close
-lrtest(glm.3c, glm.3d) # Difference not significant, but choosing based on AIC
+AIC(glm.3a, glm.3b, glm.3c, glm.3d) # Model with interaction best fit
+lrtest(glm.3c, glm.3d) # because difference AIC <6, follow up with maximum likelihood ratio test
 
 # Final model for pooled*nested data, including interaction and variable precision:
-glm.4 <- glmmTMB(Grazing.scaled ~ Protection*Species + (1 | Location), data = Assays.avg, family = list(family = "beta", link = "logit"), dispformula = ~ Species*Protection)
+glm.4 <- glmmTMB(Grazing.scaled ~ Protection*Species + (1 | Location/Assay), data = Assays.avg, family = list(family = "beta", link = "logit"), dispformula = ~ Protection)
 
 summary(glm.4)
+car::Anova(glm.4)
+
 ```
 
-## Pooled*Nested model validation
-```{r}
-# Dharma checks, see: https://cran.r-project.org/web/packages/DHARMa/vignettes/DHARMa.html
+## Pooled*Nested (Protection) model validation
+```{r pooled*nested (protection) model validation}
+
 mod <- glm.4
 modOutput <- simulateResiduals(fittedModel = mod, plot = F)
 
@@ -169,8 +189,107 @@ par(op)
 
 ```
 
-## Pooled*Nested Post hoc
+## Pooled*Nested model (Protection) Post hoc
+```{r pooled*nested model (protection) post hoc}
+HSD.PNps <- emmeans(glm.4, specs = pairwise ~ Protection|Species, adjust = "tukey", type = "response")
+HSD.PNps
+
+```
+
+## Pooled*Nested model (Protection) plotting
+```{r pooled*nested model (protection) plotting}
+
+## SARGASSUM & PADINA
+# Get averages protection
+summaryx <- data_summary(Assays.avg, varname = "Grazing.scaled", groupnames = c("Protection", "Species"))
+summaryx <- subset(summaryx, Species == "Sargassum" | Species == "Padina")
+
+# Post hoc letters
+sigletters.loc <- multcomp::cld(HSD.PNps$emmeans, alpha = 0.05, Letters = letters, decreasing = T) # get CLD
+sigletters.loc <- subset(sigletters.loc, Species == "Sargassum" | Species == "Padina")
+
+# Make order match with summary dataframe
+sigletters.loc <- sigletters.loc[order(sigletters.loc$Protection),]
+sigletters.loc <- sigletters.loc %>% mutate(.group = str_squish(.group)) # remove white spaces
+
+# Merge sig.letter dataframe into the summary dataframe
+summaryx <- cbind(summaryx, siglet.loc = sigletters.loc$.group)
+
+# Plot Protection for Both
+ggplot(summaryx, aes(x = Protection, fill = Protection, y = Grazing.scaled))+
+  geom_bar(stat = "identity", position = position_dodge())+ 
+   facet_grid(~Species) +
+  labs(x = "Fisheries management")+
+  scale_y_continuous( "Macroalgae consumed (F)", breaks = c(0, 0.5,1), label = waiver (), limits = c (0,1.05))+
+  geom_errorbar(aes(ymin=Grazing.scaled-(1*se), ymax=Grazing.scaled+(1*se)), width=.2, position=position_dodge(.9))+
+  geom_text(data = summaryx, aes(x=Protection, y = Grazing.scaled + se, label = siglet.loc), 
+            vjust= -0.8, hjust = 0.5, size = 5, fontface = "bold", position=position_dodge(.9))+
+  scale_fill_manual(values=c("#999999", "#666666", "#323232"))+
+  theme_economist()+scale_colour_economist()+
+  theme(
+    legend.position = "none",
+    panel.spacing = unit(0, "lines"), 
+    axis.title.x = element_text(color="black", vjust=-4, size = 14),
+    axis.text.x = element_text(angle = 0, size=12, face = "bold", vjust=0.5),
+    axis.title.y = element_text(color="black" , vjust=5, size = 14),
+    axis.text.y=element_text(size=12, face = "bold", vjust=0.4),
+    strip.text.x = element_text(size = 14, face = "bold.italic", vjust = 3, margin = margin(t = 10, b = 0)),
+    plot.margin = margin(t = 10, r = 40,  b = 25,  l = 20),
+    panel.background = element_rect(fill = "#FCFCFC"),
+    plot.background = element_rect(fill = "#FFFFFF"),
+    panel.grid.major = element_line(colour = "#797979", size = 0.3)
+    ) 
+ggsave("Grazing Both (Protection).tiff", width = 23, height = 11, units = "cm", dpi=1200, compression = "lzw")
+
+## Thalassia
+
+# Get averages protection
+summaryx <- data_summary(Assays.avg, varname = "Grazing.scaled", groupnames = c("Protection", "Species"))
+summaryx <- subset(summaryx, Species == "Thalassia")
+
+# Post hoc letters
+sigletters.loc <- multcomp::cld(HSD.PNps$emmeans, alpha = 0.05, Letters = letters, decreasing = T) # get CLD
+sigletters.loc <- subset(sigletters.loc, Species == "Thalassia")
+
+# Make order match with summary dataframe
+sigletters.loc <- sigletters.loc[order(sigletters.loc$Protection),]
+sigletters.loc <- sigletters.loc %>% mutate(.group = str_squish(.group)) # remove white spaces
+
+# Merge sig.letter dataframe into the summary dataframe
+summaryx <- cbind(summaryx, siglet.loc = sigletters.loc$.group)
+
+# Plot Protection for Thalassia
+ggplot(summaryx, aes(x = Protection, fill = Protection, y = Grazing.scaled))+
+  geom_bar(stat = "identity", position = position_dodge())+ 
+  labs(x = "Fisheries management")+
+  scale_y_continuous( "Thalassia consumed (F)", breaks = c(0, 0.5,1), label = waiver (), limits = c (0,1.1))+
+  geom_errorbar(aes(ymin=Grazing.scaled-(1*se), ymax=Grazing.scaled+(1*se)), width=.2, position=position_dodge(.9))+
+  geom_text(data = summaryx, aes(x=Protection, y = Grazing.scaled + (1*se), label = siglet.loc), 
+            vjust= -0.8, hjust = 0.5, size = 5, fontface = "bold", position=position_dodge(.9))+
+  scale_fill_manual(values=c("#999999", "#666666", "#323232"))+
+  theme_economist()+scale_colour_economist()+
+  theme(
+    legend.position = "none",
+    panel.spacing = unit(0, "lines"), strip.background = element_blank(),  strip.placement = "outside",
+    axis.title.x = element_text(color="black", vjust=-2, size = 14),
+    axis.text.x = element_text(angle = 0, size=12, face = "bold", vjust=0.5),
+    axis.title.y = element_text(color="black" , vjust=4, size = 14),
+    axis.text.y=element_text(size=12, face = "bold", vjust=0.4),
+    plot.margin = margin(t = 10, r = 40,  b = 25,  l = 20),
+    panel.background = element_rect(fill = "#FCFCFC"),
+    plot.background = element_rect(fill = "#FFFFFF"),
+    panel.grid.major = element_line(colour = "#797979", size = 0.3)
+    ) 
+ggsave("Grazing Thalassia (Protection).tiff", width = 23, height = 11, units = "cm", dpi=1200, compression = "lzw")
+
+```
+
+# Check packages used
 ```{r}
-test(pairs(emmeans(glm.3d, ~ Protection | Species, mode = "link")))
+
+knitr::purl("herbivory.Rmd")
+list.functions.in.file("herbivory.R")
+unlink("herbivory.R")
+
 ```
 

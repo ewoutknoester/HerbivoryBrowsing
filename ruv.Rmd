@@ -1,0 +1,143 @@
+---
+title: "RUV"
+author: "Ewout Knoester"
+date: "31/08/2021"
+output: html_document
+---
+
+# Setup
+```{r setup, include=FALSE}
+
+rm(list=ls()) # Clear workspace
+knitr::opts_knit$set(root.dir = '/tmp') #Set directory at current directory for all subsequent chunks
+options(scipen = 50) # Have all numbers in non-scientific notation
+
+library(plyr) # Join (vlookup)
+library(tidyverse) # Data manipulation and plotting
+library(readxl) # Import excel sheets
+library(htmlTable) # Data table
+
+```
+
+
+# Load & organize data
+<!--
+Data info:
+  Data collected by Veerle Plug
+  Data quantified by Veerle (then to be checked by Mercy & Cindy)
+  Bites standardized to weight and time (bites * gram / minute)
+-->
+
+# Load, organize & select data
+```{r}
+
+ruv.raw <- read_excel("RUV bites_03_Selection.xlsx", sheet = "Species")
+ruv.raw$Object <- factor(ruv.raw$Object)
+ruv.raw$Species <- factor(ruv.raw$Species)
+
+ruv.1 <- subset(ruv.raw, Object == "Sargassum" | Object == "Padina")
+colnames(ruv.1)[4] <- "Macroalgae"
+ruv.1 <- ruv.1[c(2,4,5,7)]
+
+# Add totals per species, so bar graph can be sorted from max to min
+ruv.max <- ruv.1  %>%  
+  group_by(Species) %>% 
+  dplyr::summarise(Bites_max = sum(smsBites, na.rm = TRUE))
+
+# Create category Other, for those species having relatively few Bites
+Total <- sum(ruv.max$Bites_max)
+ruv.max$Bites_pct <- ruv.max$Bites_max / Total * 100 # Express bites as percentages of total Bites
+
+# Join dataframes
+ruv.1 <- plyr::join(ruv.1, ruv.max, by = "Species")
+
+# Change Species names to category Other, when their total Bites contribute < 3%
+ruv.1$Species <- ifelse(ruv.1$Bites_pct < 0.5, "Other", as.character(ruv.1$Species))
+
+# Change order of Macroalgae
+ruv.1$Macroalgae <- factor(ruv.1$Macroalgae, ordered = T, levels = c("Sargassum", "Padina"))
+
+# Order
+ruv.1 <- ruv.1 %>%
+  arrange(Bites_max) %>%               
+  mutate(Species = fct_rev(factor(Species, unique(Species))))
+
+```
+
+# Summary table
+```{r}
+
+# Get totals per Location x Species x Macroalgae
+ruv.table <- ruv.1  %>%  
+  group_by(Species, Location, Macroalgae) %>% 
+  dplyr::summarise(Bites = sum(smsBites, na.rm = TRUE))
+
+# Make Macroalgae complete
+ruv.table <- spread(ruv.table, key = Macroalgae, value = Bites)
+ruv.table <- gather(ruv.table, Macroalgae, Bites, "Sargassum":"Padina") 
+
+# Make Species complete
+ruv.table <- spread(ruv.table, key = Species, value = Bites)
+ruv.table <- gather(ruv.table, Species, Bites, 3:ncol(ruv.table))
+
+# Reorder dataframe by max Bites per Species
+ruv.table <- ruv.table %>%
+  arrange(sum(Bites)) %>%               
+  mutate(Species = factor(Species, unique(Species)))
+
+# Set NAs (added for missing values) to 0
+ruv.table$Bites <- as.numeric(ruv.table$Bites)
+#ruv.table[is.na(ruv.table)] <- 0
+
+# Organize data
+ruv.table[with(ruv.table, order(Macroalgae, Location, Species)),]
+ruv.table <- ruv.table[,c(3,1,2,4)]
+ruv.table$Bites <-ceiling(ruv.table$Bites)
+
+# Add Total sum colum
+ruv.table <- spread(ruv.table, key = Macroalgae, value = Bites)
+ruv.table$Sum <- rowSums(ruv.table[,c("Sargassum", "Padina")], na.rm=TRUE)
+
+# Keep only first value of outer grouping column
+ruv.table = ruv.table %>%
+  group_by(Species) %>%
+  mutate(count=1:n()) %>%
+  ungroup %>%
+  mutate(Species = ifelse(count==1, as.character(Species), NA)) %>%
+  select(-count)
+
+# Create table (can be copied into Word doc)
+htmlTable(ruv.table, rnames = FALSE, align = "ll|rrr", align.header = "llrrr",
+          col.rgroup = rep(c("none", "gray93"), each = as.numeric(length(unique(na.omit(ruv.table$Location))))),
+          css.cell = c("padding-left: 0em", "padding-left: 1em", 
+                       "padding-left: 4em", "padding-left: 4em", "padding-left: 2em" ))
+
+```
+
+
+# Plotting
+```{r}
+
+ggplot(ruv.1, aes(fill = Macroalgae, y = smsBites, x = reorder(Species, -Bites_max))) + 
+  geom_bar(position="stack", stat="identity")+
+  scale_fill_manual(values = c("#323232", "#999999"))+
+  scale_y_continuous(breaks = c(0, 25, 50), label = waiver (), limits = c (0, 50))+
+  labs(x = "Species", y = expression(paste("Recorded bites (kg ", h^-1,")")))+
+  theme_economist()+scale_colour_economist()+
+  theme(
+    axis.title.x = element_text(color = "black", size = 14, vjust = 6, hjust = 0.5),
+    axis.text.x = element_text(color="black", size = 12, face = "bold.italic", angle = -35,  hjust=0, vjust = 1),
+    axis.title.y = element_text(color = "black",  size = 14, vjust = 4),
+    axis.text.y = element_text(colour = "black", size = 12, vjust=0.5, face = "bold"),
+    legend.position = "top",
+    legend.box.margin = margin(0, 0, -5, 0),
+    legend.title = element_text(size = 12),
+    legend.text = element_text(size = 14, face = "bold.italic"),
+    plot.margin = margin(t = 10, r = 40,  b = 0,  l = 20),
+    panel.background = element_rect(fill = "#FCFCFC"),
+    plot.background = element_rect(fill = "#FFFFFF"),
+    panel.grid.major = element_line(colour = "#797979", size = 0.3)
+  )
+ggsave("RUV (Species X Macroalgae).tiff", width = 23, height = 13, units = "cm", dpi=1200, compression = "lzw")
+```
+

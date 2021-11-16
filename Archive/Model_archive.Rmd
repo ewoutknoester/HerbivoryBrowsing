@@ -1,0 +1,467 @@
+---
+title: "herbivory model archive"
+author: "Ewout Knoester"
+Date: "12 August 2021"
+output: html_document
+---
+
+# Pooled analysis Beta regression
+<!--
+The pooled analysis can't be used because it ignores the nested structure of the data (ie assumes independence where there isn't)
+-->
+## Pooled model selection
+```{r pooled model selection}
+
+# Classical ANOVA (assuming normally distributed errors)
+#lm.ref <- lm(Grazing.scaled ~ Protection*Species, data = Assays.avg)
+
+# Null model
+bm.null <- betareg(Grazing.scaled ~ 1, data = Assays.avg)
+summary(bm.null)
+
+# Full model
+bm.1 <- betareg(Grazing.scaled ~ Protection*Species, data = Assays.avg) 
+summary(bm.1)
+
+# Allowing for varying precision/variance using full model
+bm.1a <- betareg(Grazing.scaled ~ Protection*Species | Location, data = Assays.avg) 
+bm.1b <- betareg(Grazing.scaled ~ Protection*Species | Species, data = Assays.avg) 
+bm.1c <- betareg(Grazing.scaled ~ Protection*Species | Protection, data = Assays.avg) 
+bm.1d <- betareg(Grazing.scaled ~ Protection*Species | Location*Species, data = Assays.avg) 
+bm.1e <- betareg(Grazing.scaled ~ Protection*Species | Protection*Species, data = Assays.avg)
+
+AIC(bm.1, bm.1a, bm.1b, bm.1c, bm.1d, bm.1e) # Location & Location*Species showing greatest improvement precision
+lrtest(bm.1a, bm.1d) # Location*Species significantly better than Location only, despite high Df
+
+# Model selection
+bm.2a <- betareg(Grazing.scaled ~ Protection | Location*Species, data = Assays.avg)
+bm.2b <- betareg(Grazing.scaled ~ Species | Location*Species, data = Assays.avg) 
+bm.2c <- betareg(Grazing.scaled ~ Protection*Species | Location*Species, data = Assays.avg)
+
+AIC(bm.2a, bm.2b, bm.2c) # Full model (with interaction) best fit 
+
+# Bias reduction
+bm.3 <- betareg(Grazing.scaled ~ Protection*Species | Location*Species, data = Assays.avg)
+bm.3bc <- betareg(Grazing.scaled ~ Protection*Species | Location*Species, data = Assays.avg, type = "BC")
+
+AIC(bm.3, bm.3bc) # Bias reduction does not result in model improvement
+
+# Final model for pooled data, including interaction and variable precision and without bias correction
+summary(bm.3)
+```
+## Pooled model fit
+```{r}
+
+mod <- bm.3
+op <- par(mfrow = c(2, 4), mar = c(5, 4, 1, 2))
+plot(resid(mod) ~ fitted(mod))
+abline(0,0)
+plot(Assays.avg$Grazing.scaled, resid(mod))
+abline(0,0)
+hist(resid(mod), main = "")
+qqnorm(resid(mod))
+plot(Assays.avg$Protection, resid(mod))
+abline(0,0)
+plot(Assays.avg$Location, resid(mod))
+abline(0,0)
+plot(Assays.avg$Species, resid(mod))
+abline(0,0)
+plot(fitted(mod) ~ Assays.avg$Grazing.scaled)
+par(op)
+```
+## Pooled Post hoc
+```{r}
+test(pairs(emmeans(bm.3, ~ Protection | Species, mode = "link")))
+```
+
+# Full nested model
+<!--
+The full nested analysis won't be used because didn't manage to get the residuals homogenous, resulting in weaker inferences
+-->
+## Full nested model selection
+```{r nested model selection}
+
+# Transform data, because Beta regression doesn't accept 0s and 1s
+Assays$Grazing.scaled <- transform01(Assays$Grazing.fraction)
+
+# Null model
+glm.FNnull <- glmmTMB(Grazing.scaled ~ 1, data = Assays, family = list(family = "beta", link = "logit"))
+
+# Full model
+glm.FN1 <- glmmTMB(Grazing.scaled ~ Protection*Species, data = Assays, family = list(family = "beta", link = "logit"))
+
+# Incorporating nested structure
+glm.FN1a <- glmmTMB(Grazing.scaled ~ Protection*Species + (1 | Location), data = Assays, family = list(family = "beta", link = "logit"))
+glm.FN1b <- glmmTMB(Grazing.scaled ~ Protection*Species + (1 | Assay), data = Assays, family = list(family = "beta", link = "logit"))
+glm.FN1c <- glmmTMB(Grazing.scaled ~ Protection*Species + (1 | Location/Assay), data = Assays, family = list(family = "beta", link = "logit"))
+
+AIC(glm.FN1, glm.FN1a, glm.FN1b, glm.FN1c) # Full nested structure (glm.FN1c) improves model performance
+
+# Allowing for variable precision using full nested model
+glm.FN2 <- glm.FN1c
+glm.FN2a <- glmmTMB(Grazing.scaled ~ Protection*Species + (1 | Location/Assay), data = Assays, family = list(family = "beta", link = "logit"), dispformula = ~ Location)
+glm.FN2b <- glmmTMB(Grazing.scaled ~ Protection*Species + (1 | Location/Assay), data = Assays, family = list(family = "beta", link = "logit"), dispformula = ~ Species)
+glm.FN2c <- glmmTMB(Grazing.scaled ~ Protection*Species + (1 | Location/Assay), data = Assays, family = list(family = "beta", link = "logit"), dispformula = ~ Protection)
+glm.FN2d <- glmmTMB(Grazing.scaled ~ Protection*Species + (1 | Location/Assay), data = Assays, family = list(family = "beta", link = "logit"), dispformula = ~ Location*Species)
+glm.FN2e <- glmmTMB(Grazing.scaled ~ Protection*Species + (1 | Location/Assay), data = Assays, family = list(family = "beta", link = "logit"), dispformula = ~ Species*Protection)
+
+AIC(glm.FN2, glm.FN2a, glm.FN2b, glm.FN2c, glm.FN2d, glm.FN2e) # Location*Species (glm.FN2d) greatest improvement 
+# Model selection
+glm.FN3a <- glmmTMB(Grazing.scaled ~ Protection + (1 | Location/Assay), data = Assays, family = list(family = "beta", link = "logit"), dispformula = ~ Location*Species)
+glm.FN3b <- glmmTMB(Grazing.scaled ~ Species + (1 | Location/Assay), data = Assays, family = list(family = "beta", link = "logit"), dispformula = ~ Location*Species)
+glm.FN3c <- glmmTMB(Grazing.scaled ~ Protection+Species + (1 | Location/Assay), data = Assays, family = list(family = "beta", link = "logit"), dispformula = ~ Location*Species)
+glm.FN3d <- glmmTMB(Grazing.scaled ~ Protection*Species + (1 | Location/Assay), data = Assays, family = list(family = "beta", link = "logit"), dispformula = ~ Location*Species)
+
+AIC(glm.FN3a, glm.FN3b, glm.FN3c, glm.FN3d) # Full model (with interaction) best fit 
+
+# Final model for nested data, including interaction and variable precision
+glm.FN4 <- glmmTMB(Grazing.scaled ~ Protection*Species + (1 | Location/Assay), data = Assays, family = list(family = "beta", link = "logit"), dispformula = ~ Location*Species)
+summary(glm.FN4)
+```
+## Full nested model validation
+```{r}
+# Dharma checks, see: https://cran.r-project.org/web/packages/DHARMa/vignettes/DHARMa.html
+mod <- glm.FN4
+modOutput <- simulateResiduals(fittedModel = mod, plot = F)
+
+op <- par(mfrow = c(2, 3), mar = c(5, 4, 1, 2))
+plotResiduals(modOutput, quantreg = T, quantiles = 0.5, rank = T, smoothScatter = F)
+testDispersion(modOutput)
+testUniformity(modOutput)
+plotResiduals(modOutput, form = Assays$Protection)
+plotResiduals(modOutput, form = Assays$Species)
+abline(0,0)
+plot(fitted(mod) ~ Assays$Grazing.scaled)
+par(op)
+
+plot(fitted(glm.FN4), resid(glm.FN4))
+```
+## Full nested Post hoc
+```{r}
+test(pairs(emmeans(glm.FN4, ~ Protection | Species, mode = "link")))
+```
+
+# Pooled model for Location: Valid model, but comparison across each study site not deemed interesting enough: chosen to focus on differences between protection zones instead
+
+# Pooled model (Location)
+<!--
+To find differences between the specific locations, a pooled model (average across Assays) is made with Location as fixed factor (thus no nesting necessary anymore)
+-->
+## Pooled model (Location) selection
+```{r pooled model (location) selection}
+
+# Null model
+glm.locnull <- glmmTMB(Grazing.scaled ~ 1, data = Assays.avg, family = list(family = "beta", link = "logit"))
+
+# Full model
+glm.loc1 <- glmmTMB(Grazing.scaled ~ Location*Species, data = Assays.avg, family = list(family = "beta", link = "logit"))
+
+# Incorporating nested structure
+glm.loc1n <- glmmTMB(Grazing.scaled ~ Location*Species + (1 | Assay), data = Assays.avg, family = list(family = "beta", link = "logit"))
+
+AIC(glm.loc1, glm.loc1n) # Nested structure improves model and deals with independence
+
+# Allowing for variable precision
+glm.loc1a <- glmmTMB(Grazing.scaled ~ Location*Species + (1 | Assay), data = Assays.avg, family = list(family = "beta", link = "logit"), dispformula = ~ Location)
+glm.loc1b <- glmmTMB(Grazing.scaled ~ Location*Species + (1 | Assay), data = Assays.avg, family = list(family = "beta", link = "logit"), dispformula = ~ Species)
+glm.loc1c <- glmmTMB(Grazing.scaled ~ Location*Species + (1 | Assay), data = Assays.avg, family = list(family = "beta", link = "logit"), dispformula = ~ Protection)
+glm.loc1d <- glmmTMB(Grazing.scaled ~ Location*Species + (1 | Assay), data = Assays.avg, family = list(family = "beta", link = "logit"), dispformula = ~ Location*Species)
+glm.loc1e <- glmmTMB(Grazing.scaled ~ Location*Species + (1 | Assay), data = Assays.avg, family = list(family = "beta", link = "logit"), dispformula = ~ Species*Protection)
+
+AIC(glm.loc1n, glm.loc1a, glm.loc1b, glm.loc1c, glm.loc1d, glm.loc1e) # Species*Protection variable precision improves model most
+
+# Model selection
+glm.loc2a <- glmmTMB(Grazing.scaled ~ Location + (1 | Assay), data = Assays.avg, family = list(family = "beta", link = "logit"), dispformula = ~ Species*Protection)
+glm.loc2b <- glmmTMB(Grazing.scaled ~ Species + (1 | Assay), data = Assays.avg, family = list(family = "beta", link = "logit"), dispformula = ~ Species*Protection)
+glm.loc2c <- glmmTMB(Grazing.scaled ~ Location+Species + (1 | Assay), data = Assays.avg, family = list(family = "beta", link = "logit"), dispformula = ~ Species*Protection)
+glm.loc2d <- glmmTMB(Grazing.scaled ~ Location*Species + (1 | Assay), data = Assays.avg, family = list(family = "beta", link = "logit"), dispformula = ~ Species*Protection)
+
+AIC(glm.loc2a, glm.loc2b, glm.loc2c, glm.loc2d) # Model with interaction (glm.loc2d) best fit of those possible
+
+# Final model for pooled data on Location, not including nesting, precision or interaction:
+glm.loc3 <- glmmTMB(Grazing.scaled ~ Location*Species + (1 | Assay), data = Assays.avg, family = list(family = "beta", link = "logit"), dispformula = ~ Species*Protection)
+
+summary(glm.loc3)
+```
+
+## Pooled (Location) model validation
+```{r pooled (location) model validation}
+
+mod <- glm.loc3
+modOutput <- simulateResiduals(fittedModel = mod, plot = F)
+
+op <- par(mfrow = c(2, 3), mar = c(5, 4, 1, 2))
+plotResiduals(modOutput, quantreg = T, quantiles = 0.5, rank = T, smoothScatter = F)
+testDispersion(modOutput)
+testUniformity(modOutput)
+plotResiduals(modOutput, form = Assays.avg$Protection)
+plotResiduals(modOutput, form = Assays.avg$Species)
+abline(0,0)
+plot(fitted(mod) ~ Assays.avg$Grazing.scaled)
+par(op)
+
+```
+
+## Pooled model (Location) Post hoc
+```{r pooled model (location) post hoc}
+HSD.Pls <- emmeans(glm.loc3, specs = pairwise ~ Location|Species, adjust = "tukey")
+HSD.Pls
+HSD.Pl <- emmeans(glm.loc3, specs = pairwise ~ Location, adjust = "tukey")
+HSD.Pl
+HSD.Ps <- emmeans(glm.loc3, specs = pairwise ~ Species, adjust = "tukey")
+HSD.Ps
+```
+
+## Plotting Protection | Location
+```{r plotting protection | location, warning = FALSE}
+
+## SARGASSUM
+
+# LOCATION
+# Get averages location
+summaryx <- data_summary(Assays.avg, varname = "Grazing.scaled", groupnames = c("Location", "Species"))
+summaryx <- subset(summaryx, Species == "Sargassum")
+
+# Post hoc letters
+sigletters.loc <- multcomp::cld(HSD.Pls$emmeans, alpha = 0.05, Letters = letters, decreasing = T) # get CLD
+sigletters.loc <- subset(sigletters.loc, Species == "Sargassum")
+
+# Make order match with summary dataframe
+sigletters.loc <- sigletters.loc[order(sigletters.loc$Location),]
+sigletters.loc <- sigletters.loc %>% mutate(.group = str_squish(.group)) # remove white spaces
+
+# Merge sig.letter dataframe into the summary dataframe
+summaryx <- cbind(summaryx, siglet.loc = sigletters.loc$.group)
+
+# PROTECTION
+# Get averages protection
+summary.p <- data_summary(Assays.avg, varname = "Grazing.scaled", groupnames = c("Protection", "Species"))
+summary.p <- subset(summary.p, Species == "Sargassum")
+
+# Post hoc letters protection
+sigletters.p <- multcomp::cld(HSD.PNps$emmeans, alpha = 0.05, Letters = letters, decreasing = T) # get CLD
+sigletters.p <- subset(sigletters.p, Species == "Sargassum")
+
+# Make order match with summary dataframe
+sigletters.p <- sigletters.p[order(sigletters.p$Protection),]
+sigletters.p <- sigletters.p %>% mutate(.group = str_squish(.group)) # remove white spaces
+
+# Merge sig.letter dataframe into the summary dataframe
+summary.p <- cbind(summary.p, siglet.p = sigletters.p$.group)
+
+# add blank rows to enlarge protection dataframe to fit location dataframe
+summary.p <- summary.p[rep(1:nrow(summary.p), each = 2), ]
+summary.p[1:nrow(summary.p) %% 2 == 0, ] <- ""
+
+# Duplicate protections names
+summary.p <- as.data.frame(append(summary.p,list(Location = c(1,2,3,4,5,6)),after = 0))
+
+summary.p$Protection <- ifelse(summary.p$Location %in% c(1,2),"Fishing",
+                        ifelse(summary.p$Location %in% c(3,4), "Reserve",  "No-take"))
+
+# Merge location and protection sigletters dataframes
+summaryx <- join(summaryx, summary.p, by = "Location")
+summaryx$siglet.p <- toupper(summaryx$siglet.p)
+summaryx$Protection <- ordered(summaryx$Protection, levels = c("Fishing", "Reserve", "No-take"))
+
+# Find highest value to place sigletters in position
+summaryx <- as.data.frame(append(summaryx, list(Grazing.max = ""),after = 2))
+summaryx <- summaryx %>%
+  group_by(Protection) %>%
+  mutate(Grazing.max = max(Grazing.scaled))
+
+# Plot Species*Treatment bar graph + error bars + letters
+ggplot(summaryx, aes(x = Location, fill = Location, y = Grazing.scaled))+
+  geom_bar(stat = "identity", position = position_dodge())+ 
+  labs(x = "Protection | Location")+
+  scale_y_continuous( "Sargassum consumed (F)", breaks = c(0.25,0.5,0.75,1), label = waiver (), limits = c (0,1.1))+
+  facet_grid(~Protection, switch = "x", scales = "free_x", space = "free_x") +
+  geom_errorbar(aes(ymin=Grazing.scaled-(1*se), ymax=Grazing.scaled+(1*se)), width=.2, position=position_dodge(.9))+
+  geom_text(data = summaryx, aes(x=Location, y = Grazing.scaled + (1.5*se), label = siglet.loc), 
+            vjust= 0, hjust = 0.5, size = 5, fontface = "bold", position=position_dodge(.9))+
+     geom_text(data = summaryx, aes(x=Location, y = Grazing.max*1.1),
+            label =  c(~""*underline("          A          "), "", ~""*underline("          AB          "), "", ~""*underline("          B          "), expression("")), 
+           vjust= -3.3, hjust = 0.1, size = 5,  position=position_dodge(.9))+
+  scale_fill_manual(values=c("#B3DCFF", "#B3DCFF", "#FFD989", "#FFD989", "#e06060", "#e06060"))+
+  theme_economist()+scale_colour_economist()+
+  theme(
+    legend.position = "none",
+    panel.spacing = unit(0, "lines"), strip.background = element_blank(),  strip.placement = "outside",
+    axis.title.x = element_text(color="black", vjust=-2, size = 12),
+    axis.text.x = element_text(angle = 0, size=12, face = "bold.italic", vjust=0.5),
+    axis.title.y = element_text(color="black" , vjust=4, size = 12),
+    axis.text.y=element_text(size=12, face = "bold", vjust=0.5),
+    panel.background = element_rect(fill = "#E4E4E4"),
+    plot.background = element_rect(fill = "#FFFFFF")
+    ) 
+ggsave("Grazing Sargassum (Protection X Location).png", width = 23, height = 11, units = "cm")
+
+## PADINA
+
+# LOCATION
+# Get averages location
+summaryx <- data_summary(Assays.avg, varname = "Grazing.scaled", groupnames = c("Location", "Species"))
+summaryx <- subset(summaryx, Species == "Padina")
+
+# Post hoc letters
+sigletters.loc <- multcomp::cld(HSD.Pls$emmeans, alpha = 0.05, Letters = letters, decreasing = T) # get CLD
+sigletters.loc <- subset(sigletters.loc, Species == "Padina")
+
+# Make order match with summary dataframe
+sigletters.loc <- sigletters.loc[order(sigletters.loc$Location),]
+sigletters.loc <- sigletters.loc %>% mutate(.group = str_squish(.group)) # remove white spaces
+
+# Merge sig.letter dataframe into the summary dataframe
+summaryx <- cbind(summaryx, siglet.loc = sigletters.loc$.group)
+
+#PROTECTION
+# Get averages protection
+summary.p <- data_summary(Assays.avg, varname = "Grazing.scaled", groupnames = c("Protection", "Species"))
+summary.p <- subset(summary.p, Species == "Padina")
+
+# Post hoc letters protection
+sigletters.p <- multcomp::cld(HSD.PNps$emmeans, alpha = 0.05, Letters = letters, decreasing = T) # get CLD
+sigletters.p <- subset(sigletters.p, Species == "Padina")
+
+# Make order match with summary dataframe
+sigletters.p <- sigletters.p[order(sigletters.p$Protection),]
+sigletters.p <- sigletters.p %>% mutate(.group = str_squish(.group)) # remove white spaces
+
+# Merge sig.letter dataframe into the summary dataframe
+summary.p <- cbind(summary.p, siglet.p = sigletters.p$.group)
+
+# add blank rows to enlarge protection dataframe to fit location dataframe
+summary.p <- summary.p[rep(1:nrow(summary.p), each = 2), ]
+summary.p[1:nrow(summary.p) %% 2 == 0, ] <- ""
+
+# Duplicate protections names
+summary.p <- as.data.frame(append(summary.p,list(Location = c(1,2,3,4,5,6)),after = 0))
+
+summary.p$Protection <- ifelse(summary.p$Location %in% c(1,2),"Fishing",
+                        ifelse(summary.p$Location %in% c(3,4), "Reserve",  "No-take"))
+
+# Merge location and protection sigletters dataframes
+summaryx <- join(summaryx, summary.p, by = "Location")
+summaryx$siglet.p <- toupper(summaryx$siglet.p)
+summaryx$Protection <- ordered(summaryx$Protection, levels = c("Fishing", "Reserve", "No-take"))
+
+# Find highest value to place sigletters in position
+summaryx <- as.data.frame(append(summaryx, list(Grazing.max = ""),after = 2))
+summaryx <- summaryx %>%
+  group_by(Protection) %>%
+  mutate(Grazing.max = max(Grazing.scaled))
+
+# Plot Species*Treatment bar graph + error bars + letters
+ggplot(summaryx, aes(x = Location, fill = Location, y = Grazing.scaled))+
+  geom_bar(stat = "identity", position = position_dodge())+ 
+  labs(x = "Protection | Location")+
+  scale_y_continuous( "Padina consumed (F)", breaks = c(0.25,0.5,0.75,1), label = waiver (), limits = c (0,1.1))+
+  facet_grid(~Protection, switch = "x", scales = "free_x", space = "free_x") +
+  geom_errorbar(aes(ymin=Grazing.scaled-(1*se), ymax=Grazing.scaled+(1*se)), width=.2, position=position_dodge(.9))+
+  geom_text(data = summaryx, aes(x=Location, y = Grazing.scaled + (1.5*se), label = siglet.loc), 
+            vjust= 0, hjust = 0.5, size = 5, fontface = "bold", position=position_dodge(.9))+
+     geom_text(data = summaryx, aes(x=Location, y = Grazing.max*1.1),
+            label =  c(~""*underline("          A          "), "", ~""*underline("          B          "), "", ~""*underline("          B          "), expression("")), 
+           vjust= -2, hjust = 0.1, size = 5,  position=position_dodge(.9))+
+  scale_fill_manual(values=c("#B3DCFF", "#B3DCFF", "#FFD989", "#FFD989", "#e06060", "#e06060"))+
+  theme_economist()+scale_colour_economist()+
+  theme(
+    legend.position = "none",
+    panel.spacing = unit(0, "lines"), strip.background = element_blank(),  strip.placement = "outside",
+    axis.title.x = element_text(color="black", vjust=-2, size = 12),
+    axis.text.x = element_text(angle = 0, size=12, face = "bold.italic", vjust=0.5),
+    axis.title.y = element_text(color="black" , vjust=4, size = 12),
+    axis.text.y=element_text(size=12, face = "bold", vjust=0.5),
+    panel.background = element_rect(fill = "#E4E4E4"),
+    plot.background = element_rect(fill = "#FFFFFF")
+    ) 
+ggsave("Grazing Padina (Protection X Location).png", width = 23, height = 11, units = "cm")
+
+## THALASSIA
+
+# LOCATION
+# Get averages location
+summaryx <- data_summary(Assays.avg, varname = "Grazing.scaled", groupnames = c("Location", "Species"))
+summaryx <- subset(summaryx, Species == "Thalassia")
+
+# Post hoc letters
+sigletters.loc <- multcomp::cld(HSD.Pls$emmeans, alpha = 0.05, Letters = letters, decreasing = T) # get CLD
+sigletters.loc <- subset(sigletters.loc, Species == "Thalassia")
+
+# Make order match with summary dataframe
+sigletters.loc <- sigletters.loc[order(sigletters.loc$Location),]
+sigletters.loc <- sigletters.loc %>% mutate(.group = str_squish(.group)) # remove white spaces
+
+# Merge sig.letter dataframe into the summary dataframe
+summaryx <- cbind(summaryx, siglet.loc = sigletters.loc$.group)
+
+#PROTECTION
+# Get averages protection
+summary.p <- data_summary(Assays.avg, varname = "Grazing.scaled", groupnames = c("Protection", "Species"))
+summary.p <- subset(summary.p, Species == "Thalassia")
+
+# Post hoc letters protection
+sigletters.p <- multcomp::cld(HSD.PNps$emmeans, alpha = 0.05, Letters = letters, decreasing = T) # get CLD
+sigletters.p <- subset(sigletters.p, Species == "Thalassia")
+
+# Make order match with summary dataframe
+sigletters.p <- sigletters.p[order(sigletters.p$Protection),]
+sigletters.p <- sigletters.p %>% mutate(.group = str_squish(.group)) # remove white spaces
+
+# Merge sig.letter dataframe into the summary dataframe
+summary.p <- cbind(summary.p, siglet.p = sigletters.p$.group)
+
+# add blank rows to enlarge protection dataframe to fit location dataframe
+summary.p <- summary.p[rep(1:nrow(summary.p), each = 2), ]
+summary.p[1:nrow(summary.p) %% 2 == 0, ] <- ""
+
+# Duplicate protections names
+summary.p <- as.data.frame(append(summary.p,list(Location = c(1,2,3,4,5,6)),after = 0))
+
+summary.p$Protection <- ifelse(summary.p$Location %in% c(1,2),"Fishing",
+                        ifelse(summary.p$Location %in% c(3,4), "Reserve",  "No-take"))
+
+# Merge location and protection sigletters dataframes
+summaryx <- join(summaryx, summary.p, by = "Location")
+summaryx$siglet.p <- toupper(summaryx$siglet.p)
+summaryx$Protection <- ordered(summaryx$Protection, levels = c("Fishing", "Reserve", "No-take"))
+
+# Find highest value to place sigletters in position
+summaryx <- as.data.frame(append(summaryx, list(Grazing.max = ""),after = 2))
+summaryx <- summaryx %>%
+  group_by(Protection) %>%
+  mutate(Grazing.max = max(Grazing.scaled))
+
+# Plot Species*Treatment bar graph + error bars + letters
+ggplot(summaryx, aes(x = Location, fill = Location, y = Grazing.scaled))+
+  geom_bar(stat = "identity", position = position_dodge())+ 
+  labs(x = "Protection | Location")+
+  scale_y_continuous( "Thalassia consumed (F)", breaks = c(0.25,0.5,0.75,1), label = waiver (), limits = c (0,1.1))+
+  facet_grid(~Protection, switch = "x", scales = "free_x", space = "free_x") +
+  geom_errorbar(aes(ymin=Grazing.scaled-(1*se), ymax=Grazing.scaled+(1*se)), width=.2, position=position_dodge(.9))+
+  geom_text(data = summaryx, aes(x=Location, y = Grazing.scaled + (1.5*se), label = siglet.loc), 
+            vjust= -0.2, hjust = 0.5, size = 5, fontface = "bold", position=position_dodge(.9))+
+     geom_text(data = summaryx, aes(x=Location, y = Grazing.max*1.1),
+            label =  c(~""*underline("          A          "), "", ~""*underline("          B          "), "", ~""*underline("          B          "), expression("")), 
+           vjust= -3, hjust = 0.1, size = 5,  position=position_dodge(.9))+
+  scale_fill_manual(values=c("#B3DCFF", "#B3DCFF", "#FFD989", "#FFD989", "#e06060", "#e06060"))+
+  theme_economist()+scale_colour_economist()+
+  theme(
+    legend.position = "none",
+    panel.spacing = unit(0, "lines"), strip.background = element_blank(),  strip.placement = "outside",
+    axis.title.x = element_text(color="black", vjust=-2, size = 12),
+    axis.text.x = element_text(angle = 0, size=12, face = "bold.italic", vjust=0.5),
+    axis.title.y = element_text(color="black" , vjust=4, size = 12),
+    axis.text.y=element_text(size=12, face = "bold", vjust=0.5),
+    panel.background = element_rect(fill = "#E4E4E4"),
+    plot.background = element_rect(fill = "#FFFFFF")
+    ) 
+ggsave("Grazing Thalassia (Protection X Location).png", width = 23, height = 11, units = "cm")
+
+```
+
+
+
+
+
+
