@@ -12,6 +12,7 @@ rm(list=ls()) # Clear workspace
 knitr::opts_knit$set(root.dir = '/tmp') #Set directory at current directory for all subsequent chunks
 
 library(readxl) # Import excel sheets
+library(writexl)
 library(tidyverse) # Data manipulation and plotting
 library(plyr) # Data summary
 library(ggthemes) # pretty plots
@@ -80,7 +81,10 @@ Assays <- subset(Assays, Species == "Padina" | Species == "Sargassum")
 Assays$Species <- factor(Assays$Species)
 
 # Averaging values 
-Assays.loc <- ddply(Assays, ~Location+Species, summarise, Grazing = mean(Grazing) / 100, Protection = Protection[1])
+Assays.loc <- data_summary(Assays, varname = "Grazing.fraction", groupnames = c("Protection", "Location", "Species", "Assay"))
+Assays.loc <- data_summary(Assays.loc, varname = "Grazing.fraction", groupnames = c("Protection", "Location", "Species"))
+names(Assays.loc)[names(Assays.loc) == 'Grazing.fraction'] <- "Grazing"
+Assays.assay <- ddply(Assays, ~Location+Species+Assay, summarise, Grazing = mean(Grazing) / 100, Protection = Protection[1])
 
 # BENTHIC
 Surveys.raw <- read_excel("Benthic surveys_DATABASE_2021-08.xlsx", sheet = "Summary POINT")
@@ -97,14 +101,23 @@ Surveys$Location <- ifelse(Surveys$Location %in% c("Firefly"),"1",
 Surveys$Location <- factor(Surveys$Location)
 
 # Averaging values
-Surveys.loc <- ddply(Surveys, ~Location, summarise, Hard.coral = mean(Hard.coral), Turf.algae = mean(Turf.algae),
-               Macroalgae = mean(Brown.algae + Red.algae + Green.algae), Urchins.graze = mean(Urchins.graze)/40)
+Surveys$Macroalgae <- Surveys$Brown.algae + Surveys$Red.algae + Surveys$Green.algae
+Surveys$Urchins <- Surveys$Urchins.graze/40 # Transform survey count into density (/m2)
 
+Surveys.loc <- ddply(Surveys, ~Location, summarise,
+               Hard.coral.avg = mean(Hard.coral), Hard.coral.se = sd(Hard.coral)/sqrt(length(Hard.coral)),
+               Turf.algae.avg = mean(Turf.algae), Turf.algae.se = sd(Turf.algae)/sqrt(length(Turf.algae)),
+               Macroalgae.avg = mean(Macroalgae), Macroalgae.se = sd(Macroalgae)/sqrt(length(Macroalgae)),
+               Urchins.avg = mean(Urchins), Urchins.se = sd(Urchins)/sqrt(length(Urchins)))
+               
 # Merge
 Averages <- join(Assays.loc, Surveys.loc, by = "Location")
+Averages.assay <- join(Assays.assay, Surveys.loc, by = "Location")
 
 Averages.avg <- ddply(Averages, ~Location, summarise, Grazing = mean(Grazing), Protection = Protection[1],
-                Hard.coral = Hard.coral[1], Macroalgae = Macroalgae[1], Urchins.graze = Urchins.graze[1])
+                Hard.coral = Hard.coral.avg[1], Hard.coral.se = Hard.coral.se[1],
+                Macroalgae = Macroalgae.avg[1], Macroalgae.se = Macroalgae.se[1],
+                Urchins.graze = Urchins.avg[1], Urchins.graze.se = Urchins.se[1])
 
 # FISH
 Fish.raw <- read_excel("Fish surveys_DATABASE_04_Selection (herbivores).xlsx", sheet = "SPECIES")
@@ -125,74 +138,58 @@ Fish$Location <- factor(Fish$Location)
 
 ## FISH FUNCTION
 
-Fish.avg <- ddply(Fish, ~Location+Function, summarise, Biomass = sum(Biomass))
+Fish.avg <- ddply(Fish, ~Location+Survey+Function, summarise, Biomass = sum(Biomass))
 
 # Long to wide
 Fish.avg <- spread(Fish.avg, key = Function, value = Biomass)
 Fish.avg[is.na(Fish.avg)] <- 0
 
 # Get averages per survey
-Fish.avg <- as.data.frame(append(Fish.avg, list(Surveys = c(11, 14, 15, 15, 11, 11)), after = 1))
-Fish.avg[,3:7] <- Fish.avg[,3:7]/Fish.avg$Surveys
+Fish.avg$Screx <- Fish.avg$Scraper + Fish.avg$Excavator
+Fish.avg$Herbivores <- Fish.avg$Browser + Fish.avg$Grazer + Fish.avg$Screx # Roving herbivores (not including territorials)
 
-# Add totals & Grazing & Protection
-Fish.avg <- as.data.frame(append(Fish.avg, list(Herbivores = Fish.avg$Browser + Fish.avg$Grazer + Fish.avg$Scraper + Fish.avg$Excavator), after = 6))
-Fish.avg <- as.data.frame(append(Fish.avg, list(Screx = Fish.avg$Scraper + Fish.avg$Excavator), after = 6))
-Fish.avg <- as.data.frame(append(Fish.avg, list(Grazing = Averages.avg$Grazing), after = 1))
-Fish.avg <- as.data.frame(append(Fish.avg, list(Protection = Averages.avg$Protection), after = 1))
+Fish.avg <- ddply(Fish.avg, ~Location, summarise,
+               Herbivores.avg = mean(Herbivores), Herbivores.se = sd(Herbivores)/sqrt(length(Herbivores)),   
+               Browser.avg = mean(Browser), Browser.se = sd(Browser)/sqrt(length(Browser)),
+               Grazer.avg = mean(Grazer), Grazer.se = sd(Grazer)/sqrt(length(Grazer)),
+               Screx.avg = mean(Screx), Screx.se = sd(Screx)/sqrt(length(Screx)),
+               Territorial.avg = mean(Territorial), Territorial.se = sd(Territorial)/sqrt(length(Territorial)))
 
 # Merge
 Averages <- join(Averages, Fish.avg, by = "Location")
-Averages <- Averages %>%  select(-c(9,10)) # Remove duplicates
-
+Averages.assay <- join(Averages.assay, Fish.avg, by = "Location")
 Averages.avg <- join(Averages.avg, Fish.avg, by = "Location")
-Averages.avg <- Averages.avg %>%  select(-c(7,8)) # Remove duplicates
 
 ## FISH SPECIES
-
-Fish.spec <- ddply(Fish, ~Location+Species, summarise, Biomass = sum(Biomass))
+Fish.spec <- ddply(Fish, ~Location+Species+Survey, summarise, Biomass = sum(Biomass))
 
 # Long to wide
 Fish.spec <- spread(Fish.spec, key = Species, value = Biomass)
 Fish.spec[is.na(Fish.spec)] <- 0
 
+# Grouping
+Fish.spec <- Fish.spec %>%
+  mutate(Naso = rowSums(select(., starts_with('Naso'))))
+Fish.spec <- Fish.spec %>%
+  mutate(Ctenochaetus = rowSums(select(., starts_with('Ctenochaetus'))))
+
 # Get averages per survey
-Fish.spec <- as.data.frame(append(Fish.spec, list(Surveys = c(11, 14, 15, 15, 11, 11)), after = 1))
-Fish.spec[,3:45] <- Fish.spec[,3:45]/Fish.spec$Surveys
-
-# Acanthurus grouping
-Fish.spec <- as.data.frame(append(Fish.spec, list(Acanthurus = Fish.spec$Acanthurus.leucosternon + Fish.spec$Acanthurus.nigricauda + Fish.spec$Acanthurus.nigrofuscus + Fish.spec$Acanthurus.sp. +
-Fish.spec$Acanthurus.tennenti + Fish.spec$Acanthurus.triostegus + Fish.spec$Acanthurus.xanthopterus),
-after = 1))
-# Ctenochaetus grouping
-Fish.spec <- as.data.frame(append(Fish.spec, list(Ctenochaetus = Fish.spec$Ctenochaetus.binotatus + Fish.spec$Ctenochaetus.striatus + Fish.spec$Ctenochaetus.truncatus), after = 1))
-# Acanthurinae grouping
-Fish.spec <- as.data.frame(append(Fish.spec, list(Acanthurinae = Fish.spec$Acanthurus + Fish.spec$Ctenochaetus + Fish.spec$Zebrasoma.desjardinii + Fish.spec$Zebrasoma.scopas), after = 1))
-# Naso grouping
-Fish.spec <- as.data.frame(append(Fish.spec, list(Naso = Fish.spec$Naso.brevirostris + Fish.spec$Naso.elegans + Fish.spec$Naso.sp + Fish.spec$Naso.unicornis), after = 1))
-# Scarinae grouping
-Fish.spec <- as.data.frame(append(Fish.spec, list(Scarinae = Fish.spec$Calotomus.carolinus + Fish.spec$Calotomus.spinidens + Fish.spec$Cetoscarus.bicolor + Fish.spec$Chlorurus.atrilunula +
-Fish.spec$Chlorurus.sordidus + Fish.spec$Hipposcarus.harid + Fish.spec$Scarus.frenatus + Fish.spec$Scarus.ghobban + Fish.spec$Scarus.niger + Fish.spec$Scarus.psittacus + Fish.spec$Scarus.rubroviolaceus), after = 1))
-# Siganus grouping
-Fish.spec <- as.data.frame(append(Fish.spec, list(Siganus = Fish.spec$Siganus.argenteus + Fish.spec$Siganus.luridus + Fish.spec$Siganus.stellatus + Fish.spec$Siganus.sutor), after = 1))
-
-Fish.gen <- Fish.spec[,1:7]
-Fish.gen <- as.data.frame(append(Fish.gen, list(Grazing = Averages.avg$Grazing), after = 1))
-Fish.gen <- as.data.frame(append(Fish.gen, list(Protection = Averages.avg$Protection), after = 1))
+Fish.spec <- ddply(Fish.spec, ~Location, summarise,
+               Naso.avg = mean(Naso), Naso.se = sd(Naso)/sqrt(length(Naso)),
+               Ctenochaetus.avg = mean(Ctenochaetus), Ctenochaetus.se = sd(Ctenochaetus)/sqrt(length(Ctenochaetus))) 
 
 # Merge
-Averages <- join(Averages, Fish.gen, by = "Location")
-Averages <- Averages %>%  select(-c(17,18)) # Remove duplicates
-
-Averages.avg <- join(Averages.avg, Fish.gen, by = "Location")
-Averages.avg <- Averages.avg %>%  select(-c(15,16)) # Remove duplicates
+Averages <- join(Averages, Fish.spec, by = "Location")
+Averages.assay <- join(Averages.assay, Fish.spec, by = "Location")
+Averages.avg <- join(Averages.avg, Fish.spec, by = "Location")
 
 ```
 
 # Correlations
 ```{r correlations}
 
-cors.both <- correlation::correlation(Averages, p_adjust = "none")
+# By LOCATION (n = 12)
+cors.both <- as.data.frame(correlation::correlation(Averages, p_adjust = "none"))
 
 cors.both$ID <- paste(cors.both$Parameter2, cors.both$Parameter1, sep = "X")
 cors.both <- subset(cors.both, Parameter1 == "Grazing")
@@ -202,16 +199,30 @@ cors.both$p <- round(cors.both$p, 2)
 cors.both$star <- ifelse(cors.both$p <= 0.001, "***",
   ifelse(cors.both$p <= 0.01, "**", 
     ifelse(cors.both$p <= 0.05, "*", "")))
-cors.both$sum <- paste("R = ", cors.both$r, cors.both$star, sep = "")
+cors.both$sum <- paste("r = ", cors.both$r, cors.both$star, sep = "")
+
+# BY ASSAY (n = 60)
+cors.assay <- as.data.frame(correlation::correlation(Averages.assay, p_adjust = "bonferroni"))
+
+cors.assay$ID <- paste(cors.assay$Parameter2, cors.assay$Parameter1, sep = "X")
+cors.assay <- subset(cors.assay, Parameter1 == "Grazing")
+cors.assay <- cors.assay[c(3, 7, 8, 9, 11, 12)]
+cors.assay$r <- round(cors.assay$r, 2)
+cors.assay$p <- round(cors.assay$p, 2)
+cors.assay$star <- ifelse(cors.assay$p <= 0.001, "***",
+  ifelse(cors.assay$p <= 0.01, "**", 
+    ifelse(cors.assay$p <= 0.05, "*", "")))
+cors.assay$sum <- paste("r = ", cors.assay$r, cors.assay$star, sep = "")
 
 ```
 
-# Compiled Fig
+# Compiled Fig by LOCATION
 ```{r}
 
 #! Choice for dataset
 data.plot <- Averages # Averages (n = 12), Averages.avg (n = 6)
 cors <- cors.both # cors.both (n = 12)
+sizese <- 1 # Width se bars
 
 # Layout:
 ytitle <- "Algae consumed (F)"
@@ -219,10 +230,16 @@ Mar <- c(15,0,15,0) # Plot margins
 colour_p <- c("#B3DCFF","#FFD989", "#e06060")
 
 #A
-A.B <- ggplot(data.plot, aes(x=Browser, y=Grazing)) + 
-  scale_x_continuous(expression(paste("Browsers (kg ", ha^-1,")")), breaks = c(0, 100, 200), label = waiver (), limits = c (0,210))+
+A.H <- ggplot(data.plot, aes(x=Herbivores.avg, y=Grazing)) + 
+  scale_x_continuous(expression(paste("Herbivores (kg ", ha^-1,")")),
+                     breaks = c(0, 250, 500), label = waiver (), limits = c (0,600))+
   scale_y_continuous(ytitle, breaks = c(0, 0.25,0.5,0.75,1), label = waiver (), limits = c (0,1))+
   geom_point(aes(colour=Protection, shape = Species), size =6) +
+  geom_errorbar(aes(x = Herbivores.avg, colour = Protection, ymin=Grazing-se,
+                    ymax=Grazing+se), width = 0.02*max(data.plot$Herbivores.avg), size = sizese)+
+    geom_errorbar(aes(x = Herbivores.avg, colour = Protection, 
+                    xmin=ifelse(Herbivores.avg-Herbivores.se < 0,0,Herbivores.avg-Herbivores.se),
+                    xmax=Herbivores.avg+Herbivores.se), width = 0.02*max(data.plot$Grazing), size = sizese)+
   scale_color_manual(values = colour_p)+
   geom_smooth(colour="black", method="lm", se=FALSE, size = 1.2, fullrange=TRUE)+ 
   theme(
@@ -242,13 +259,19 @@ A.B <- ggplot(data.plot, aes(x=Browser, y=Grazing)) +
     )+
     guides(shape = guide_legend(order = 2), colour = guide_legend(order = 1))+
     geom_text(aes(label=Location),hjust=0.5, vjust=0.35)+
-    annotate("text", x = 110, y = 0.4, label = cors$sum[cors$ID == "BrowserXGrazing"], size = 4)
+    annotate("text", x = 455, y = 0.60, label = cors$sum[cors$ID == "Herbivores.avgXGrazing"], size = 4.5, fontface = "bold")
 
 #B
-B.N <- ggplot(data.plot, aes(x=Naso, y=Grazing)) + 
-  scale_x_continuous(expression(paste("Naso spp (kg ", ha^-1,")")), breaks = c(0, 50, 100), label = waiver (), limits = c (0, 130))+
+B.B <- ggplot(data.plot, aes(x=Browser.avg, y=Grazing)) + 
+  scale_x_continuous(expression(paste("Browsers (kg ", ha^-1,")")),
+                     breaks = c(0, 150, 300), label = waiver (), limits = c (0,310))+
   scale_y_continuous("", breaks = c(0, 0.25,0.5,0.75,1), label = waiver (), limits = c (0,1))+
   geom_point(aes(colour=Protection, shape = Species), size =6) +
+  geom_errorbar(aes(x = Browser.avg, colour = Protection, ymin=Grazing-se, ymax=Grazing+se),
+                width = 0.02*max(data.plot$Browser.avg), size = sizese)+
+  geom_errorbar(aes(x = Browser.avg, colour = Protection, 
+                    xmin=ifelse(Browser.avg-Browser.se < 0,0,Browser.avg-Browser.se),
+                    xmax=Browser.avg+Browser.se), width = 0.02*max(data.plot$Grazing), size = sizese)+
   scale_color_manual(values = colour_p)+
   geom_smooth(colour="black", method="lm", se=FALSE, size = 1.2, fullrange=TRUE)+ 
   theme(
@@ -267,13 +290,18 @@ B.N <- ggplot(data.plot, aes(x=Naso, y=Grazing)) +
     )+
     guides(shape = guide_legend(order = 2), colour = guide_legend(order = 1))+
     geom_text(aes(label=Location),hjust=0.5, vjust=0.35)+
-    annotate("text", x = 75, y = 0.40, label = cors$sum[cors$ID == "NasoXGrazing"], size = 4)
+    annotate("text", x = 185, y = 0.61, label = cors$sum[cors$ID == "Browser.avgXGrazing"], size = 4.5, fontface = "bold")
 
 #C
-C.G <- ggplot(data.plot, aes(x=Grazer, y=Grazing)) + 
-  scale_x_continuous(expression(paste("Grazers (kg ", ha^-1,")")), breaks = c(0, 50, 100), label = waiver (), limits = c (0, 110))+
+C.G <- ggplot(data.plot, aes(x=Grazer.avg, y=Grazing)) + 
+  scale_x_continuous(expression(paste("Grazers (kg ", ha^-1,")")), breaks = c(0, 75, 150), label = waiver (), limits = c (0, 160))+
   scale_y_continuous("", breaks = c(0, 0.25,0.5,0.75,1), label = waiver (), limits = c (0,1))+
   geom_point(aes(colour=Protection, shape = Species), size =6) +
+  geom_errorbar(aes(x = Grazer.avg, colour = Protection, ymin=Grazing-se,
+                    ymax=Grazing+se), width = 0.02*max(data.plot$Grazer.avg), size = sizese)+
+  geom_errorbar(aes(x = Grazer.avg, colour = Protection, 
+                    xmin=ifelse(Grazer.avg-Grazer.se < 0,0,Grazer.avg-Grazer.se),
+                    xmax=Grazer.avg+Grazer.se), width = 0.02*max(data.plot$Grazing), size = sizese)+
   scale_color_manual(values = colour_p)+
   geom_smooth(colour="black", method="lm", se=FALSE, size = 1.2, fullrange=TRUE)+ 
   theme(
@@ -292,13 +320,19 @@ C.G <- ggplot(data.plot, aes(x=Grazer, y=Grazing)) +
     )+
     guides(shape = guide_legend(order = 2), colour = guide_legend(order = 1))+
     geom_text(aes(label=Location),hjust=0.5, vjust=0.35)+
-    annotate("text", x = 62, y = 0.28, label = cors$sum[cors$ID == "GrazerXGrazing"], size = 4)
+    annotate("text", x = 110, y = 0.61, label = cors$sum[cors$ID == "Grazer.avgXGrazing"], size = 4.5, fontface = "bold")
 
 #D
-D.S <- ggplot(data.plot, aes(x=Screx, y=Grazing)) + 
-  scale_x_continuous(expression(paste("Scrapers (kg ", ha^-1,")")), breaks = c(0, 100, 200), label = waiver (), limits = c (0, 250))+
+D.S <- ggplot(data.plot, aes(x=Screx.avg, y=Grazing)) + 
+  scale_x_continuous(expression(paste("Scrapers (kg ", ha^-1,")")),
+                     breaks = c(0, 100, 200), label = waiver (), limits = c (0, 260))+
   scale_y_continuous(ytitle, breaks = c(0, 0.25,0.5,0.75,1), label = waiver (), limits = c (0,1))+
   geom_point(aes(colour=Protection, shape = Species), size =6) +
+  geom_errorbar(aes(x = Screx.avg, colour = Protection, ymin=Grazing-se,
+                    ymax=Grazing+se), width = 0.02*max(data.plot$Screx.avg), size = sizese)+
+  geom_errorbar(aes(x = Screx.avg, colour = Protection, 
+                    xmin=ifelse(Screx.avg-Screx.se < 0,0,Screx.avg-Screx.se),
+                    xmax=Screx.avg+Screx.se), width = 0.02*max(data.plot$Grazing), size = sizese)+
   scale_color_manual(values = colour_p)+
   geom_smooth(colour="black", method="lm", se=FALSE, size = 1.2, fullrange=TRUE)+ 
   theme(
@@ -318,13 +352,18 @@ D.S <- ggplot(data.plot, aes(x=Screx, y=Grazing)) +
     )+
     guides(shape = guide_legend(order = 2), colour = guide_legend(order = 1))+
     geom_text(aes(label=Location),hjust=0.5, vjust=0.35)+
-    annotate("text", x = 120, y = 0.42, label = cors$sum[cors$ID == "ScrexXGrazing"], size = 4)
+    annotate("text", x = 170, y = 0.59, label = cors$sum[cors$ID == "Screx.avgXGrazing"], size = 4.5, fontface = "bold")
 
 #E
-E.T <- ggplot(data.plot, aes(x=Territorial, y=Grazing)) + 
-  scale_x_continuous(expression(paste("Damselfish (kg ", ha^-1,")")), breaks = c(0, 40, 80), label = waiver (), limits = c (0, 80))+
+E.T <- ggplot(data.plot, aes(x=Territorial.avg, y=Grazing)) + 
+  scale_x_continuous(expression(paste("Damselfish (kg ", ha^-1,")")), breaks = c(0, 25, 50), label = waiver (), 
+                     limits = c (0, 60))+
   scale_y_continuous("", breaks = c(0, 0.25,0.5,0.75,1), label = waiver (), limits = c (0,1))+
   geom_point(aes(colour=Protection, shape = Species), size =6) +
+  geom_errorbar(aes(x = Territorial.avg, colour = Protection, ymin=Grazing-se, ymax=Grazing+se), width = 0.02*max(data.plot$Territorial.avg), size = sizese)+
+  geom_errorbar(aes(x = Territorial.avg, colour = Protection, 
+                    xmin=ifelse(Territorial.avg-Territorial.se < 0,0,Territorial.avg-Territorial.se),
+                    xmax=Territorial.avg+Territorial.se), width = 0.02*max(data.plot$Grazing), size = sizese)+
   scale_color_manual(values = colour_p)+
   geom_smooth(colour="black", method="lm", se=FALSE, size = 1.2, fullrange=TRUE)+ 
   theme(
@@ -343,13 +382,15 @@ E.T <- ggplot(data.plot, aes(x=Territorial, y=Grazing)) +
     )+
     guides(shape = guide_legend(order = 2), colour = guide_legend(order = 1))+
     geom_text(aes(label=Location),hjust=0.5, vjust=0.35)+
-    annotate("text", x = 58, y = 0.48, label = cors$sum[cors$ID == "TerritorialXGrazing"], size = 4)
+    annotate("text", x = 50, y = 0.40, label = cors$sum[cors$ID == "Territorial.avgXGrazing"], size = 4.5, fontface = "bold")
 
 #F
-F.U <- ggplot(data.plot, aes(x=Urchins.graze, y=Grazing)) + 
+F.U <- ggplot(data.plot, aes(x=Urchins.avg, y=Grazing)) + 
   scale_x_continuous(expression(paste("Urchins (", m^-2,")")), breaks = c(0, 0.75, 1.5), label = waiver (), limits = c (0, 1.6))+
   scale_y_continuous("", breaks = c(0, 0.25,0.5,0.75,1), label = waiver (), limits = c (0,1))+
   geom_point(aes(colour=Protection, shape = Species), size =6) +
+  geom_errorbar(aes(x = Urchins.avg, colour = Protection, ymin=Grazing-se, ymax=Grazing+se), width = 0.02*max(data.plot$Urchins.avg), size = sizese)+
+  geom_errorbar(aes(x = Urchins.avg, colour = Protection, xmin=ifelse(Urchins.avg-Urchins.se < 0,0,Urchins.avg-Urchins.se), xmax=Urchins.avg+Urchins.se), width = 0.02*max(data.plot$Grazing), size = sizese)+
   scale_color_manual(values = colour_p)+
   geom_smooth(colour="black", method="lm", se=FALSE, size = 1.2, fullrange=TRUE)+ 
   theme(
@@ -368,21 +409,25 @@ F.U <- ggplot(data.plot, aes(x=Urchins.graze, y=Grazing)) +
     )+
     guides(shape = guide_legend(order = 2), colour = guide_legend(order = 1))+
     geom_text(aes(label=Location),hjust=0.5, vjust=0.35)+
-    annotate("text", x = 1.1, y = 0.57, label = cors$sum[cors$ID == "Urchins.grazeXGrazing"], size = 4)
+    annotate("text", x = 1, y = 0.57, label = cors$sum[cors$ID == "Urchins.avgXGrazing"], size = 4.5, fontface = "bold")
 
 #G
-G.M <- ggplot(data.plot, aes(x=Macroalgae, y=Grazing)) + 
-  scale_x_continuous("Macroalgae (%)", breaks = c(0, 30 ,60), label = waiver (), limits = c (0, 60))+
+G.M <- ggplot(data.plot, aes(x=Macroalgae.avg, y=Grazing)) + 
+  scale_x_continuous("Macroalgae (%)", breaks = c(0, 25 ,50), label = waiver (), limits = c (0, 58))+
   scale_y_continuous(ytitle, breaks = c(0, 0.25, 0.5, 0.75, 1), label = waiver (), limits = c (0,1))+
   geom_point(aes(colour=Protection, shape = Species), size =6) +
+  geom_errorbar(aes(x = Macroalgae.avg, colour = Protection, ymin=Grazing-se, ymax=Grazing+se), width = 0.02*max(data.plot$Macroalgae.avg), size = sizese)+
+  geom_errorbar(aes(x = Macroalgae.avg, colour = Protection, 
+                    xmin=ifelse(Macroalgae.avg-Macroalgae.se < 0, 0, Macroalgae.avg-Macroalgae.se),
+                    xmax=Macroalgae.avg+Macroalgae.se), width = 0.02*max(data.plot$Grazing), size = sizese)+
   scale_color_manual(values = colour_p)+
   geom_smooth(colour="black", method = "lm", se = FALSE, size = 1.2, fullrange = TRUE)+ 
   theme(
     text = element_text(size = 16),
     axis.title.x = element_text(color = "black", vjust = -1, size = 14, margin=margin(c(t = 9, b = 12))),
     axis.text.x = element_text(angle = 0, size = 14, face = "bold", vjust = 0),
-    axis.title.y = element_text(color = "black", vjust = 2, hjust = 0.3, size = 14),
-    axis.text.y = element_text(size = 14, face = "bold", vjust = 0),
+    axis.title.y = element_text(color="black" ,  vjust=2, hjust = 0.3, size = 14),
+    axis.text.y=element_text(size=14, face = "bold", vjust=0),
     panel.background = element_rect(fill = "#FCFCFC"),
     plot.background = element_rect(fill = "#FFFFFF"),
     axis.line = element_line(size = 0.5, colour = "Black", linetype=1),
@@ -394,13 +439,18 @@ G.M <- ggplot(data.plot, aes(x=Macroalgae, y=Grazing)) +
     )+
     guides(shape = guide_legend(order = 2), colour = guide_legend(order = 1))+
     geom_text(aes(label=Location),hjust=0.5, vjust=0.35)+
-    annotate("text", x = 28, y = 0.65, label = cors$sum[cors$ID == "MacroalgaeXGrazing"], size = 4)
+    annotate("text", x = 28, y = 0.60, label = cors$sum[cors$ID == "Macroalgae.avgXGrazing"], size = 4.5, fontface = "bold")
 
 #H
-H.C <- ggplot(data.plot, aes(x=Hard.coral, y=Grazing)) + 
-  scale_x_continuous("Hard coral (%)", breaks = c(0, 30 ,60), label = waiver (), limits = c (0, 60))+
+H.C <- ggplot(data.plot, aes(x=Hard.coral.avg, y=Grazing)) + 
+  scale_x_continuous("Hard coral (%)", breaks = c(0, 25 ,50), label = waiver (), limits = c (0, 62))+
   scale_y_continuous("", breaks = c(0, 0.25, 0.5, 0.75, 1), label = waiver (), limits = c (0,1))+
   geom_point(aes(colour=Protection, shape = Species), size =6) +
+  geom_errorbar(aes(x = Hard.coral.avg, colour = Protection, ymin=Grazing-se, ymax=Grazing+se),
+                width = 0.02*max(data.plot$Hard.coral.avg), size = sizese)+
+  geom_errorbar(aes(x = Hard.coral.avg, colour = Protection, 
+                    xmin=ifelse(Hard.coral.avg-Hard.coral.se < 0, 0, Hard.coral.avg-Hard.coral.se),
+                    xmax=Hard.coral.avg+Hard.coral.se), width = 0.02*max(data.plot$Grazing), size = sizese)+
   scale_color_manual(values = colour_p)+
   geom_smooth(colour="black", method = "lm", se = FALSE, size = 1.2, fullrange = TRUE)+ 
   theme(
@@ -419,16 +469,17 @@ H.C <- ggplot(data.plot, aes(x=Hard.coral, y=Grazing)) +
     )+
     guides(shape = guide_legend(order = 2), colour = guide_legend(order = 1))+
     geom_text(aes(label=Location),hjust=0.5, vjust=0.35)+
-    annotate("text", x = 22, y = 0.64, label = cors$sum[cors$ID == "Hard.coralXGrazing"], size = 4)
+    annotate("text", x = 22, y = 0.64, label = cors$sum[cors$ID == "Hard.coral.avgXGrazing"], size = 4.5, fontface = "bold")
 
-LegPlot <- ggplot(data.plot, aes(x=Screx, y=Grazing)) + 
+LegPlot <- ggplot(data.plot, aes(x=Screx.avg, y=Grazing)) + 
   geom_point(aes(colour=Protection, shape = Species), size =6) +
   scale_color_manual(values = colour_p)+
   theme(
     legend.box.background = element_rect(colour = "transparent", fill = "transparent"),
     legend.box.margin = margin(-35, 0, 0, 20),
     legend.key = element_rect(fill = "transparent"),
-    plot.margin = margin(Mar, "cm")
+    plot.margin = margin(Mar, "cm"),
+    legend.position="right"
     )+
   labs(colour = "Protection", shape = "Species")+
   guides(colour = guide_legend(order = 1), shape = guide_legend(order = 2))
@@ -438,15 +489,275 @@ Leg <- as_ggplot(get_legend(LegPlot))+
    theme(legend.key = element_rect(fill = "black"))
 Leg
 
-figure <- ggarrange(A.B, B.N, C.G, D.S, E.T, F.U, G.M, H.C, Leg,
+figure <- ggarrange(A.H, B.B, C.G, D.S, E.T, F.U, G.M, H.C, Leg,
                     labels = c("a", "b", "c", "d", "e", "f", "g", "h", ""), vjust = 0.4, hjust = -0.15,
                     font.label = list(size = 16, color = "black", face = "bold", family = NULL),
                     ncol = 3, nrow = 3, 
-                    common.legend = T, legend = c("none"))+
-  theme(plot.margin = margin(0.6,0.1,0.1,0.1, "cm")) 
-ggsave("Correlations Both.tiff", figure, width = 24, height = 24, units = "cm", dpi=1200, compression = "lzw")
+                    common.legend = T,
+                    legend="none")+
+  theme(plot.margin = margin(0.3,0.1,0.1,0.3, "cm")) 
+ggsave("Correlations Both.tiff", figure, width = 24, height = 25, units = "cm", dpi=1200, compression = "lzw")
+
+
+
 
 ```
+
+# Compiled Fig by ASSAY (not included)
+```{r eval = FALSE}
+
+#! Choice for dataset
+data.plot.assay <- Averages.assay # n = 60
+
+# Layout:
+ytitle <- "Algae consumed (F)"
+Mar <- c(15,0,15,0) # Plot margins
+colour_p <- c("#B3DCFF","#FFD989", "#e06060")
+point.size = 5
+
+#A
+A.H <- ggplot(data.plot.assay, aes(x=Herbivores, y=Grazing)) + 
+  scale_x_continuous(expression(paste("Herbivores (kg ", ha^-1,")")), breaks = c(0, 250, 500), label = waiver (), limits = c (0,510))+
+  scale_y_continuous(ytitle, breaks = c(0, 0.25,0.5,0.75,1), label = waiver (), limits = c (0,1))+
+  geom_point(aes(colour=Protection, shape = Species), size = point.size) +
+  scale_color_manual(values = colour_p)+
+  geom_smooth(colour="black", method="lm", se=FALSE, size = 1.2, fullrange=TRUE)+ 
+  theme(
+    text = element_text(size = 16),
+    axis.title.x = element_text(color="black", vjust=-1, size = 14),
+    axis.text.x = element_text(angle = 0, size=14, face = "bold", vjust=0),
+    axis.title.y = element_text(color="black" ,  vjust=2, hjust = 0.3, size = 14),
+    axis.text.y=element_text(size=14, face = "bold", vjust=0),
+    panel.background = element_rect(fill = "#FCFCFC"),
+    plot.background = element_rect(fill = "#FFFFFF"),
+    axis.line = element_line(size = 0.5, colour = "Black", linetype=1),
+    panel.border = element_rect(colour = "white", fill=NA, size=0.5),
+    legend.key = element_rect(fill = "#FFFFFF"),
+    panel.grid.minor = element_blank(),
+    panel.grid.major = element_line(colour="#FCFCFC", size=0.1),
+    plot.margin = margin(Mar, "cm")
+    )+
+    guides(shape = guide_legend(order = 2), colour = guide_legend(order = 1))+
+    annotate("text", x = 350, y = 0.50, label = cors.assay$sum[cors.assay$ID == "HerbivoresXGrazing"],
+             size = 4.5, fontface = 'bold')
+
+#B
+B.B <- ggplot(data.plot.assay, aes(x=Browser, y=Grazing)) + 
+  scale_x_continuous(expression(paste("Browsers (kg ", ha^-1,")")), breaks = c(0, 100, 200), label = waiver (), limits = c (0,210))+
+  scale_y_continuous("", breaks = c(0, 0.25,0.5,0.75,1), label = waiver (), limits = c (0,1))+
+  geom_point(aes(colour=Protection, shape = Species), size = point.size) +
+  scale_color_manual(values = colour_p)+
+  geom_smooth(colour="black", method="lm", se=FALSE, size = 1.2, fullrange=TRUE)+ 
+  theme(
+    text = element_text(size = 16),
+    axis.title.x = element_text(color="black", vjust=-1, size = 14),
+    axis.text.x = element_text(angle = 0, size=14, face = "bold", vjust=0),
+    axis.text.y = element_blank(),
+    panel.background = element_rect(fill = "#FCFCFC"),
+    plot.background = element_rect(fill = "#FFFFFF"),
+    axis.line = element_line(size = 0.5, colour = "Black", linetype=1),
+    panel.border = element_rect(colour = "white", fill=NA, size=0.5),
+    legend.key = element_rect(fill = "#FFFFFF"),
+    panel.grid.minor = element_blank(),
+    panel.grid.major = element_line(colour="#FCFCFC", size=0.1),
+    plot.margin = margin(Mar, "cm")
+    )+
+    guides(shape = guide_legend(order = 2), colour = guide_legend(order = 1))+
+    annotate("text", x = 80, y = 0.39, label = cors.assay$sum[cors.assay$ID == "BrowserXGrazing"],
+             size = 4.5, fontface = 'bold')
+
+#C
+C.G <- ggplot(data.plot.assay, aes(x=Grazer, y=Grazing)) + 
+  scale_x_continuous(expression(paste("Grazers (kg ", ha^-1,")")), breaks = c(0, 50, 100), label = waiver (), limits = c (0, 110))+
+  scale_y_continuous("", breaks = c(0, 0.25,0.5,0.75,1), label = waiver (), limits = c (0,1))+
+  geom_point(aes(colour=Protection, shape = Species), size = point.size) +
+  scale_color_manual(values = colour_p)+
+  geom_smooth(colour="black", method="lm", se=FALSE, size = 1.2, fullrange=TRUE)+ 
+  theme(
+    text = element_text(size = 16),
+    axis.title.x = element_text(color="black", vjust=-1, size = 14),
+    axis.text.x = element_text(angle = 0, size=14, face = "bold", vjust=0),
+    axis.title.y = element_blank(),
+    panel.background = element_rect(fill = "#FCFCFC"),
+    plot.background = element_rect(fill = "#FFFFFF"),
+    axis.line = element_line(size = 0.5, colour = "Black", linetype=1),
+    panel.border = element_rect(colour = "white", fill=NA, size=0.5),
+    legend.key = element_rect(fill = "#FFFFFF"),
+    panel.grid.minor = element_blank(),
+    panel.grid.major = element_line(colour="#FCFCFC", size=0.1),
+    plot.margin = margin(Mar, "cm")
+    )+
+    guides(shape = guide_legend(order = 2), colour = guide_legend(order = 1))+
+    annotate("text", x = 90, y = 0.50, label = cors.assay$sum[cors.assay$ID == "GrazerXGrazing"],
+             size = 4.5, fontface = 'bold')
+
+#D
+D.S <- ggplot(data.plot.assay, aes(x=Screx, y=Grazing)) + 
+  scale_x_continuous(expression(paste("Scrapers (kg ", ha^-1,")")), breaks = c(0, 100, 200), label = waiver (), limits = c (0, 210))+
+  scale_y_continuous(ytitle, breaks = c(0, 0.25,0.5,0.75,1), label = waiver (), limits = c (0,1))+
+  geom_point(aes(colour=Protection, shape = Species), size = point.size) +
+  scale_color_manual(values = colour_p)+
+  geom_smooth(colour="black", method="lm", se=FALSE, size = 1.2, fullrange=TRUE)+ 
+  theme(
+    text = element_text(size = 16),
+    axis.title.x = element_text(color="black", vjust=-1, size = 14),
+    axis.text.x = element_text(angle = 0, size=14, face = "bold", vjust=0),
+    axis.title.y = element_text(color="black" ,  vjust=2, hjust = 0.3, size = 14),
+    axis.text.y=element_text(size=14, face = "bold", vjust=0),
+    panel.background = element_rect(fill = "#FCFCFC"),
+    plot.background = element_rect(fill = "#FFFFFF"),
+    axis.line = element_line(size = 0.5, colour = "Black", linetype=1),
+    panel.border = element_rect(colour = "white", fill=NA, size=0.5),
+    legend.key = element_rect(fill = "#FFFFFF"),
+    panel.grid.minor = element_blank(),
+    panel.grid.major = element_line(colour="#FCFCFC", size=0.1),
+    plot.margin = margin(Mar, "cm")
+    )+
+    guides(shape = guide_legend(order = 2), colour = guide_legend(order = 1))+
+    annotate("text", x = 110, y = 0.48, label = cors.assay$sum[cors.assay$ID == "ScrexXGrazing"],
+             size = 4.5, fontface = 'bold')
+
+#E
+E.T <- ggplot(data.plot.assay, aes(x=Territorial, y=Grazing)) + 
+  scale_x_continuous(expression(paste("Damselfish (kg ", ha^-1,")")), breaks = c(0, 25, 50), label = waiver (), limits = c (0, 55))+
+  scale_y_continuous("", breaks = c(0, 0.25,0.5,0.75,1), label = waiver (), limits = c (0,1))+
+  geom_point(aes(colour=Protection, shape = Species), size = point.size) +
+  scale_color_manual(values = colour_p)+
+  geom_smooth(colour="black", method="lm", se=FALSE, size = 1.2, fullrange=TRUE)+ 
+  theme(
+    text = element_text(size = 16),
+    axis.title.x = element_text(color="black", vjust=-1, size = 14),
+    axis.text.x = element_text(angle = 0, size=14, face = "bold", vjust=0),
+    axis.text.y = element_blank(),
+    panel.background = element_rect(fill = "#FCFCFC"),
+    plot.background = element_rect(fill = "#FFFFFF"),
+    axis.line = element_line(size = 0.5, colour = "Black", linetype=1),
+    panel.border = element_rect(colour = "white", fill=NA, size=0.5),
+    legend.key = element_rect(fill = "#FFFFFF"),
+    panel.grid.minor = element_blank(),
+    panel.grid.major = element_line(colour="#FCFCFC", size=0.1),
+    plot.margin = margin(Mar, "cm")
+    )+
+    guides(shape = guide_legend(order = 2), colour = guide_legend(order = 1))+
+    annotate("text", x = 40, y = 0.49, label = cors.assay$sum[cors.assay$ID == "TerritorialXGrazing"],
+             size = 4.5, fontface = 'bold')
+
+#F
+F.U <- ggplot(data.plot.assay, aes(x=Urchins.graze, y=Grazing)) + 
+  scale_x_continuous(expression(paste("Urchins (", m^-2,")")), breaks = c(0, 0.75, 1.5), label = waiver (), limits = c (0, 1.6))+
+  scale_y_continuous("", breaks = c(0, 0.25,0.5,0.75,1), label = waiver (), limits = c (0,1))+
+  geom_point(aes(colour=Protection, shape = Species), size = point.size) +
+  scale_color_manual(values = colour_p)+
+  geom_smooth(colour="black", method="lm", se=FALSE, size = 1.2, fullrange=TRUE)+ 
+  theme(
+    text = element_text(size = 16),
+    axis.title.x = element_text(color = "black", vjust = -1, size = 14),
+    axis.text.x = element_text(angle = 0, size = 14, face = "bold", vjust = 0),
+    axis.title.y = element_text(color="black" ,  vjust=2, hjust = 0.3, size = 14),
+    axis.text.y=element_blank(),
+    panel.background = element_rect(fill = "#FCFCFC"),
+    plot.background = element_rect(fill = "#FFFFFF"),
+    axis.line = element_line(size = 0.5, colour = "Black", linetype=1),
+    panel.border = element_rect(colour = "white", fill=NA, size=0.5),
+    legend.key = element_rect(fill = "#FFFFFF"),
+    panel.grid.minor = element_blank(),
+    panel.grid.major = element_line(colour="#FCFCFC", size=0.1),
+    plot.margin = margin(Mar, "cm")
+    )+
+    guides(shape = guide_legend(order = 2), colour = guide_legend(order = 1))+
+    annotate("text", x = 1, y = 0.62, label = cors.assay$sum[cors.assay$ID == "Urchins.grazeXGrazing"],
+             size = 4.5, fontface = 'bold')
+
+#G
+G.M <- ggplot(data.plot.assay, aes(x=Macroalgae, y=Grazing)) + 
+  scale_x_continuous("Macroalgae (%)", breaks = c(0, 25 ,50), label = waiver (), limits = c (0, 55))+
+  scale_y_continuous(ytitle, breaks = c(0, 0.25, 0.5, 0.75, 1), label = waiver (), limits = c (0,1))+
+  geom_point(aes(colour=Protection, shape = Species), size = point.size) +
+  scale_color_manual(values = colour_p)+
+  geom_smooth(colour="black", method = "lm", se = FALSE, size = 1.2, fullrange = TRUE)+ 
+  theme(
+    text = element_text(size = 16),
+    axis.title.x = element_text(color = "black", vjust = -1, size = 14, margin=margin(c(t = 9, b = 12))),
+    axis.text.x = element_text(angle = 0, size = 14, face = "bold", vjust = 0),
+    axis.title.y = element_text(color="black" ,  vjust=2, hjust = 0.3, size = 14),
+    axis.text.y=element_text(size=14, face = "bold", vjust=0),
+    panel.background = element_rect(fill = "#FCFCFC"),
+    plot.background = element_rect(fill = "#FFFFFF"),
+    axis.line = element_line(size = 0.5, colour = "Black", linetype=1),
+    panel.border = element_rect(colour = "white", fill=NA, size=0.5),
+    legend.key = element_rect(fill = "#FFFFFF"),
+    panel.grid.minor = element_blank(),
+    panel.grid.major = element_line(colour="#FCFCFC", size=0.1),
+    plot.margin = margin(Mar, "cm")
+    )+
+    guides(shape = guide_legend(order = 2), colour = guide_legend(order = 1))+
+    annotate("text", x = 28, y = 0.62, label = cors.assay$sum[cors.assay$ID == "MacroalgaeXGrazing"],
+             size = 4.5, fontface = 'bold')
+
+#H
+H.C <- ggplot(data.plot.assay, aes(x=Hard.coral, y=Grazing)) + 
+  scale_x_continuous("Hard coral (%)", breaks = c(0, 25 ,50), label = waiver (), limits = c (0, 60))+
+  scale_y_continuous("", breaks = c(0, 0.25, 0.5, 0.75, 1), label = waiver (), limits = c (0,1))+
+  geom_point(aes(colour=Protection, shape = Species), size = point.size) +
+  scale_color_manual(values = colour_p)+
+  geom_smooth(colour="black", method = "lm", se = FALSE, size = 1.2, fullrange = TRUE)+ 
+  theme(
+    text = element_text(size = 16),
+    axis.title.x = element_text(color = "black", vjust = -1, size = 14, margin=margin(c(t = 9, b = 12))),
+    axis.text.x = element_text(angle = 0, size = 14, face = "bold", vjust = 0),
+    axis.text.y = element_blank(),
+    panel.background = element_rect(fill = "#FCFCFC"),
+    plot.background = element_rect(fill = "#FFFFFF"),
+    axis.line = element_line(size = 0.5, colour = "Black", linetype=1),
+    panel.border = element_rect(colour = "white", fill=NA, size=0.5),
+    legend.key = element_rect(fill = "#FFFFFF"),
+    panel.grid.minor = element_blank(),
+    panel.grid.major = element_line(colour="#FCFCFC", size=0.1),
+    plot.margin = margin(Mar, "cm")
+    )+
+    guides(shape = guide_legend(order = 2), colour = guide_legend(order = 1))+
+    annotate("text", x = 20, y = 0.65, label = cors.assay$sum[cors.assay$ID == "Hard.coralXGrazing"],
+             size = 4.5, fontface = 'bold')
+
+LegPlot <- ggplot(data.plot.assay, aes(x=Screx, y=Grazing)) + 
+  geom_point(aes(colour=Protection, shape = Species), size =6) +
+  scale_color_manual(values = colour_p)+
+  theme(
+    legend.box.background = element_rect(colour = "transparent", fill = "transparent"),
+    legend.box.margin = margin(-35, 0, 0, 20),
+    legend.key = element_rect(fill = "transparent"),
+    plot.margin = margin(Mar, "cm"),
+    legend.position="right"
+    )+
+  labs(colour = "Protection", shape = "Species")+
+  guides(colour = guide_legend(order = 1), shape = guide_legend(order = 2))
+LegPlot
+
+Leg <- as_ggplot(get_legend(LegPlot))+
+   theme(legend.key = element_rect(fill = "black"))
+Leg
+
+figure <- ggarrange(A.H, B.B, C.G, D.S, E.T, F.U, G.M, H.C, Leg,
+                    labels = c("a", "b", "c", "d", "e", "f", "g", "h", ""), vjust = 0.4, hjust = -0.15,
+                    font.label = list(size = 16, color = "black", face = "bold", family = NULL),
+                    ncol = 3, nrow = 3, 
+                    common.legend = T,
+                    legend="none")+
+  theme(plot.margin = margin(0.6,0.1,0.1,0.1, "cm")) 
+ggsave("Correlations Assay.tiff", figure, width = 24, height = 25, units = "cm", dpi=1200, compression = "lzw")
+
+```
+
+# Save summary data to Excel for correlations (for Herbivory Grazing project/ article)
+```{r corexcel}
+
+FishBenthic <- select(Averages.avg, c('Location', 'Grazing', 'Hard.coral', 'Macroalgae', 'Grazer.avg', 'Browser.avg', 'Territorial.avg', 'Herbivores.avg',  'Ctenochaetus.avg' ))
+names(FishBenthic) <- c("Location", "Browsing_2019", "Hard.coral_2019", "Macroalgae_2019", "Grazers_2019", "Browsers_2019", "Territorial_2019", "Herbivores_2019", "Ctenochaetus_2019")
+
+write_xlsx(FishBenthic,"Correlations_FishBenthic.xlsx")
+
+```
+
 
 
 

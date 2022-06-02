@@ -13,9 +13,26 @@ knitr::opts_knit$set(root.dir = '/tmp') #Set directory at current directory for 
 options(scipen = 50) # Have all numbers in non-scientific notation
 
 library(plyr) # Join (vlookup)
+library(writexl)
 library(tidyverse) # Data manipulation and plotting
+library(ggthemes) # Pretty plots
 library(readxl) # Import excel sheets
 library(htmlTable) # Data table
+
+data_summary <- function(data, varname, groupnames){
+  require(plyr)
+  summary_func <- function(x, col){
+    c(sum = sum(x[[col]], na.rm=TRUE),
+      mean = mean(x[[col]], na.rm=TRUE),
+      sd = sd(x[[col]], na.rm=TRUE),
+      n  = length(x[[col]]),
+      se = sd(x[[col]], na.rm=TRUE)/sqrt(length(x)))
+  }
+  data_sum<-ddply(data, groupnames, .fun=summary_func,
+                  varname)
+  #data_sum <- plyr::rename(data_sum, c("mean" = varname))
+ return(data_sum)
+}
 
 ```
 
@@ -25,7 +42,7 @@ library(htmlTable) # Data table
 Data info:
   Data collected by Veerle Plug
   Data quantified by Veerle (then to be checked by Mercy & Cindy)
-  Bites standardized to weight and time (bites * gram / minute)
+  Bites standardized to weight and time (bites * kg / hour)
 -->
 
 # Load, organize & select data
@@ -126,18 +143,28 @@ ggplot(ruv.1, aes(fill = Macroalgae, y = smsBites, x = reorder(Species, -Bites_m
   theme_economist()+scale_colour_economist()+
   theme(
     axis.title.x = element_text(color = "black", size = 14, vjust = 6, hjust = 0.5),
-    axis.text.x = element_text(color="black", size = 12, face = "bold.italic", angle = -35,  hjust=0, vjust = 1),
+    axis.text.x = element_text(color="black", size = 12, face = "bold.italic", angle = -45,  hjust=0, vjust = 1),
     axis.title.y = element_text(color = "black",  size = 14, vjust = 4),
     axis.text.y = element_text(colour = "black", size = 12, vjust=0.5, face = "bold"),
     legend.position = "top",
     legend.box.margin = margin(0, 0, -5, 0),
     legend.title = element_text(size = 12),
     legend.text = element_text(size = 14, face = "bold.italic"),
-    plot.margin = margin(t = 10, r = 40,  b = 0,  l = 20),
+    plot.margin = margin(t = 10, r = 55,  b = 0,  l = 20),
     panel.background = element_rect(fill = "#FCFCFC"),
     plot.background = element_rect(fill = "#FFFFFF"),
     panel.grid.major = element_line(colour = "#797979", size = 0.3)
   )
 ggsave("RUV (Species X Macroalgae).tiff", width = 23, height = 13, units = "cm", dpi=1200, compression = "lzw")
+```
+
+# Save summary data to Excel for correlations for Grazing project
+```{r corexcel}
+
+RUV_Bites_Browsing <- data_summary(ruv.table, varname = "Sum", groupnames = c("Location"))
+RUV_Bites_Browsing <- select(RUV_Bites_Browsing, c('Location', 'sum')) 
+names(RUV_Bites_Browsing) <- c("Location", "BrowsingBites_kg.h")
+write_xlsx(RUV_Bites_Browsing, "Correlations_RUVBrowsingBites.xlsx")
+
 ```
 
