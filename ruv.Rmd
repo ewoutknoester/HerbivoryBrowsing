@@ -26,7 +26,7 @@ data_summary <- function(data, varname, groupnames){
       mean = mean(x[[col]], na.rm=TRUE),
       sd = sd(x[[col]], na.rm=TRUE),
       n  = length(x[[col]]),
-      se = sd(x[[col]], na.rm=TRUE)/sqrt(length(x)))
+      se = sd(x[[col]], na.rm=TRUE)/sqrt(length(x[[col]])))
   }
   data_sum<-ddply(data, groupnames, .fun=summary_func,
                   varname)
@@ -99,8 +99,8 @@ ruv.table <- gather(ruv.table, Species, Bites, 3:ncol(ruv.table))
 
 # Reorder dataframe by max Bites per Species
 ruv.table <- ruv.table %>%
-  arrange(sum(Bites)) %>%               
-  mutate(Species = factor(Species, unique(Species)))
+  dplyr::arrange(sum(Bites)) %>%               
+  dplyr::mutate(Species = factor(Species, unique(Species)))
 
 # Set NAs (added for missing values) to 0
 ruv.table$Bites <- as.numeric(ruv.table$Bites)
@@ -109,7 +109,7 @@ ruv.table$Bites <- as.numeric(ruv.table$Bites)
 # Organize data
 ruv.table[with(ruv.table, order(Macroalgae, Location, Species)),]
 ruv.table <- ruv.table[,c(3,1,2,4)]
-ruv.table$Bites <-ceiling(ruv.table$Bites)
+ruv.table$Bites <- ceiling(ruv.table$Bites)
 
 # Add Total sum colum
 ruv.table <- spread(ruv.table, key = Macroalgae, value = Bites)

@@ -25,7 +25,7 @@ data_summary <- function(data, varname, groupnames){
     c(mean = mean(x[[col]], na.rm=TRUE),
       sd = sd(x[[col]], na.rm=TRUE),
       n  = length(x[[col]]),
-      se = sd(x[[col]], na.rm=TRUE)/sqrt(length(x)))
+      se = sd(x[[col]], na.rm=TRUE)/sqrt(length(x[[col]])))
   }
   data_sum<-ddply(data, groupnames, .fun=summary_func,
                   varname)
@@ -54,8 +54,8 @@ Analysis info:
 
 ```{r data loading}
 # ASSAYS
-Assays.raw <- read.csv("Assays.csv", check.names = FALSE, header = TRUE, colClasses = c(ID = "factor", 
-          Assay = "factor", Structure = "factor", Location = "factor", Date = "factor", Species = "factor"))
+Assays.raw <- read.csv("Macrophyte buffet assays_Herbivory browsing.csv", check.names = FALSE, header = TRUE,
+  colClasses = c(ID = "factor", Assay = "factor", Structure = "factor", Location = "factor", Date = "factor", Species = "factor"))
 
 # Insert new columns for Protection and fill based on study site
 Assays <- as.data.frame(append(Assays.raw,list(Protection = ""),after = 4))
@@ -85,6 +85,10 @@ Assays.loc <- data_summary(Assays, varname = "Grazing.fraction", groupnames = c(
 Assays.loc <- data_summary(Assays.loc, varname = "Grazing.fraction", groupnames = c("Protection", "Location", "Species"))
 names(Assays.loc)[names(Assays.loc) == 'Grazing.fraction'] <- "Grazing"
 Assays.assay <- ddply(Assays, ~Location+Species+Assay, summarise, Grazing = mean(Grazing) / 100, Protection = Protection[1])
+
+# Average per location (to compare with Emilia grazing)
+Assays.loc.loc <- data_summary(Assays, varname = "Grazing.fraction", groupnames = c("Protection", "Location", "Assay"))
+Assays.loc.loc <- data_summary(Assays.loc.loc, varname = "Grazing.fraction", groupnames = c("Protection", "Location"))
 
 # BENTHIC
 Surveys.raw <- read_excel("Benthic surveys_DATABASE_2021-08.xlsx", sheet = "Summary POINT")
@@ -122,7 +126,7 @@ Averages.avg <- ddply(Averages, ~Location, summarise, Grazing = mean(Grazing), P
 # FISH
 Fish.raw <- read_excel("Fish surveys_DATABASE_04_Selection (herbivores).xlsx", sheet = "SPECIES")
 
-Fish <- Fish.raw %>%  select(-c(4)) 
+Fish <- Fish.raw %>%  select(-c('Genus')) 
 Fish <- Fish %>% 
   dplyr::rename(
      Location = 'Location (#)',
@@ -137,7 +141,6 @@ Fish$Function <- factor(Fish$Function)
 Fish$Location <- factor(Fish$Location)
 
 ## FISH FUNCTION
-
 Fish.avg <- ddply(Fish, ~Location+Survey+Function, summarise, Biomass = sum(Biomass))
 
 # Long to wide
@@ -751,10 +754,13 @@ ggsave("Correlations Assay.tiff", figure, width = 24, height = 25, units = "cm",
 # Save summary data to Excel for correlations (for Herbivory Grazing project/ article)
 ```{r corexcel}
 
-FishBenthic <- select(Averages.avg, c('Location', 'Grazing', 'Hard.coral', 'Macroalgae', 'Grazer.avg', 'Browser.avg', 'Territorial.avg', 'Herbivores.avg',  'Ctenochaetus.avg' ))
-names(FishBenthic) <- c("Location", "Browsing_2019", "Hard.coral_2019", "Macroalgae_2019", "Grazers_2019", "Browsers_2019", "Territorial_2019", "Herbivores_2019", "Ctenochaetus_2019")
+Browsersdata <- select(Averages.avg, c('Location', 'Hard.coral', 'Hard.coral.se', 'Herbivores.avg', 'Herbivores.se'))
+names(Browsersdata) <- c("Location", "Hard.coral", "Hard.coral.se", "RovingHerbivores", "RovingHerbivores.se")
 
-write_xlsx(FishBenthic,"Correlations_FishBenthic.xlsx")
+Browsersdata$Browsing <- Assays.loc.loc$Grazing.fraction
+Browsersdata$Browsing.se <- Assays.loc.loc$se
+
+write_xlsx(Browsersdata, "Browser_Assay.xlsx")
 
 ```
 

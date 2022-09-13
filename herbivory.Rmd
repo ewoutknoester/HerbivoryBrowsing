@@ -12,16 +12,13 @@ knitr::opts_knit$set(root.dir = '/tmp') #Set directory at current directory for 
 
 library(plyr) # Join data frames (vlookup)
 library(tidyverse) # Data manipulation and plotting
-library(grid) # Double x-axis plots
 library(ggthemes) # Pretty plots
 library(betareg) # Beta regression
 library(glmmTMB) # Nested beta regression
 library(DHARMa) # Nested model validation
-library(lmtest) # Likelihood testing
 library(emmeans) # Pairwise comparisons
 library(multcompView) # Significance letters to plots
 library(car) # ANOVA results GLM
-library(rstan)
 library(NCmisc) # Check packages used
 
 # Function to facilitate averaging data frame
@@ -49,20 +46,20 @@ Data info:
   Weight_control = biomass loss on caged structures, calculated for each location x macrophyte combination.
   Weight_control on average 19%
   Weight_control was 1 of the 11 structures, randomly chosen. Raw data not included in this data set
-  After correction with Weight_contorl, grazing > 100 was set to 100 and grazing < 0 was set to 0
+  After correction with Weight_control, grazing > 100 was set to 100 and grazing < 0 was set to 0
   ~1 day interval between measurement Weight(out) and Weight(in), standardized to 24hrs exactly
 -->
 
 ```{r data loading}
-Assays <- read.csv("Assays.csv", check.names = FALSE, header = TRUE, colClasses = c(ID = "factor", 
-          Assay = "factor", Structure = "factor", Location = "factor", Date = "factor", Species = "factor"))
+# Load data and assign factors
+Assays <- read.csv("Macrophyte buffet assays_Herbivory browsing.csv", 
+ colClasses = c(ID = "factor", Assay = "factor", Structure = "factor", Location = "factor", Date = "factor", Species = "factor"))
 
 # Insert new columns for Protection and fill based on study site
-Assays <- as.data.frame(append(Assays,list(Protection = ""),after = 4))
+Assays$Protection <- as.factor(ifelse(Assays$Location %in% c("Firefly", "Pilli Pipa"), "Fished",
+                     ifelse(Assays$Location %in% c("Dolphin Point", "Lower Mpunguti"), "Reserve",
+                                                   "No-take")))
 
-Assays$Protection <- ifelse(Assays$Location %in% c("Firefly", "Pilli Pipa"),"Fished",
-                     ifelse(Assays$Location %in% c("Dolphin Point", "Lower Mpunguti"), "Reserve", "No-take"))
-Assays$Protection <- factor(Assays$Protection)
 
 # Change Location names to numbers
 Assays$Location <- ifelse(Assays$Location %in% c("Firefly"),"1",
