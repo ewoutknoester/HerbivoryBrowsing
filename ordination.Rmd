@@ -1,0 +1,204 @@
+---
+title: "ordination"
+author: "Ewout Knoester"
+date: "16/09/2022"
+output: html_document
+---
+
+# Setup
+```{r setup, include=FALSE}
+
+rm(list=ls()) # Clear workspace
+knitr::opts_knit$set(root.dir = '/tmp') #Set directory at current directory for all subsequent chunks
+options(scipen = 100) # Remove scientific notation
+
+library(vegan) # Ordination
+library(BiodiversityR) # Extract ordination data
+library(ggrepel) # Non-overlapping labels
+library(gggenes) # Draw arrow with low alpha
+library(car) # Anova
+library(readxl) # Import excel sheets
+library(writexl)
+library(tidyverse) # Data manipulation and plotting
+library(plyr) # Data summary
+library(data.table)
+library(stats)
+library(stringr) # String matches  
+library(panelr) # Convert data from wide to long
+library(ggthemes) # pretty plots
+library(ggpubr) # Arrange plots
+library(DHARMa) # glm model validation
+library(emmeans) # Post hoccing
+library(cowplot) # Plot grid
+
+# Function to facilitate averaging dataset
+data_summary <- function(data, varname, groupnames){
+  require(plyr)
+  summary_func <- function(x, col){
+    c(mean = mean(x[[col]], na.rm=TRUE),
+      sd = sd(x[[col]], na.rm=TRUE),
+      n  = length(x[[col]]),
+      se = sd(x[[col]], na.rm=TRUE)/sqrt(length(x)))
+  }
+  data_sum<-ddply(data, groupnames, .fun=summary_func,
+                  varname)
+  data_sum <- plyr::rename(data_sum, c("mean" = varname))
+ return(data_sum)
+}
+```
+
+# Data prep
+```{r data prep}
+
+# ---- DATA PREP ----
+
+## ==== SPECIES DATA ====
+# Load data (generated from site anovas and correlation rmd files)
+df0.clean <- read_excel("Fish surveys_DATABASE_2017-2018_Herbivory browsing.xlsx", sheet = 1)
+
+# Set factors
+## Set Protection based on Study site
+df0.clean$Protection <- as.factor(ifelse(df0.clean$Location  == 1, "Fished",
+                  ifelse(df0.clean$Location  == 2, "Fished", 
+                   ifelse(df0.clean$Location  == 3, "Reserve", 
+                    ifelse(df0.clean$Location  == 4, "Reserve", 
+                     ifelse(df0.clean$Location  == 5, "No-take", "No-take"))))))
+df0.clean$Protection <- factor(df0.clean$Protection, ordered = TRUE, levels = c("Fished", "Reserve", "No-take"))
+
+## Set all to factors
+tofactors <- c('Location', 'Survey', 'Species', 'Diet', 'DietH') 
+df0.clean[tofactors] <- lapply(df0.clean[tofactors], factor)
+
+# Get survey count
+Survey.count <- ddply(df0.clean, ~Protection+Location+Survey, summarise,
+               Abundance = sum(Abundance))
+Survey.count <- Survey.count %>%
+          group_by(Location) %>%
+          tally()
+
+# Select relevant data
+ordid <- subset(df0.clean, (Diet == "HerDet" | Diet == "HerMac" | Diet == "Omnivr"))
+ordid <- select(ordid, -c("a", "b", "Area", "Diet", "DietH"))
+
+# Back from wide to long to aggregate across Locations
+ordid <- tidyr::spread(ordid, key = Species, value = Biomass.kgha) # From long to wide
+ordid[is.na(ordid)] <- 0 # Set species not observed in a survey to 0 biomass
+ordid <- aggregate(. ~ Protection+Location, data = ordid, FUN = sum) # Sum over Location
+
+# Cleanup
+ordid <- select(ordid, -c("Protection", "Location", "Survey", "Abundance", "SizeClass"))
+
+## Remove species not observed in any survey
+ordid <- ordid[,colSums(ordid) > 0]
+ordid$Location <- c(1,2,3,4,5,6)
+
+# Correct for varying number of surveys per Location
+ordid$Survey.count <- Survey.count$n
+species <- ordid[,1:(ncol(ordid)-2)]/ordid[,ncol(ordid)]
+
+# ==== ENVIRONMENTAL DATA ====
+# Load data
+Averages.avg <- read_excel("Correlations.xlsx", sheet = 1)
+Averages.avg$Protection <- ordered(Averages.avg$Protection, levels = c("Fishing", "Reserve", "No-take"))
+
+environment <- select(Averages.avg, c( "Protection", "Grazing", "sd", "Hard.coral.avg",
+                                    "Macroalgae.avg", "Urchins.avg", "Urchins.sd"))
+
+```
+
+# Ordination
+```{r ordination}
+
+# z-score transformation
+environment$Grazing <- decostand(environment$Grazing, method = "standardize")
+environment$Urchins.avg <- decostand(environment$Urchins.avg, method = "standardize")
+
+# When ReefType included, not significant (df =  1, SumOfSqs = 0.2748, F = 1.6675, p = 0.13889)
+## ordid <- add_column(ordid, ReefType = "", .after = 1)
+## ordid$ReefType <- ifelse(as.numeric(ordid$Location) < 3, "Patch", ifelse(as.numeric(ordid$Location) > 5, "Patch", "Fringe"))
+## ordid$ReefType <- as.factor(ordid$ReefType)
+
+# db-RDA
+dbRDA = capscale(species ~ Protection+Grazing+Urchins.avg, environment, dist="bray")
+
+## Results
+anova.cca(dbRDA) # overall test of the significant of the analysis
+anova.cca(dbRDA, by="axis") # test axes for significance
+anova.cca(dbRDA, by="terms") # test for sign. environ. variables
+
+summary(dbRDA)
+
+# Prepare data for plotting
+## Create simple plot to extract data for ggplot
+plot1 <- ordiplot(dbRDA)
+
+## Extract Study site and Protection data
+sites.long1 <- sites.long(plot1, env.data = environment)
+
+## Extract Axes data
+axis.long2 <- axis.long(dbRDA, choices=c(1, 2))
+axis.long2$label <- str_replace(axis.long2$label, "CAP", "dbRDA")
+
+## Extract Species data
+spec.envfit <- envfit(plot1, env=species) # In list form
+spec.data.envfit <- data.frame(r=spec.envfit$vectors$r, p=spec.envfit$vectors$pvals) # As data frame
+species.long2 <- species.long(plot1, spec.data=spec.data.envfit)
+species.long3 <- species.long2[species.long2$r >= 0.4, ] # Select only species that explain substantially
+
+## Extract Vector data
+vectors.envfit <- envfit(plot1, env=environment)
+vectors.long3 <- vectorfit.long(vectors.envfit)
+vectors.long3$vector[vectors.long3$vector == "Grazing"] <- "Browsing pressure"
+vectors.long3$vector[vectors.long3$vector == "Urchins.avg"] <- "Urchin density"
+
+# Extract Factor data
+factors.long3 <- as.data.frame(scores(vectors.envfit, "factors"))
+factors.long3 <- tibble::rownames_to_column(factors.long3, "factor")
+factors.long3$factor <- factors.long3$factor %>% stringr::str_remove(pattern = "Protection")
+
+# Draw error that allows lower alpha
+colour_arrow <- c("#DAEEFE","#FFEFCC", "#FEBEBE")
+colour_p <- c("#B3DCFF","#FFD989", "#e06060")
+
+# Ordination plot
+ggplot() + 
+    geom_vline(xintercept = c(0), color = "grey70", linetype = 2) +
+    geom_hline(yintercept = c(0), color = "grey70", linetype = 2) +  
+    scale_x_continuous(limits = c (-1, 1))+
+    scale_y_continuous(limits = c (-0.6, 1.6))+
+    xlab(axis.long2[1, "label"]) +
+    ylab(axis.long2[2, "label"]) +  
+    scale_x_continuous(sec.axis = dup_axis(labels=NULL, name=NULL)) +
+    scale_y_continuous(sec.axis = dup_axis(labels=NULL, name=NULL)) + 
+    geom_segment(data= factors.long3, aes(x=0, y=0, xend=CAP1*1, yend=CAP2*1), 
+                 colour=colour_arrow, size=5,
+                 arrow=arrow(type = "closed", length = unit(1, "cm"))) +
+    geom_segment(data=subset(vectors.long3, vector %in% c("Browsing pressure", "Urchin density")),
+                 aes(x=0, y=0, xend=axis1*0.9, yend=axis2*0.9), 
+                 colour="#A0FF86", size=2, arrow=arrow()) +
+    geom_point(data=sites.long1, aes(x=axis1, y=axis2, colour= Protection), size=10) +
+    scale_color_manual(values = colour_p)+
+    geom_text(data=sites.long1, aes(x=axis1, y=axis2, label = labels), size=4, fontface = "bold") +
+    geom_point(data=species.long3, aes(x=axis1, y=axis2)) +
+    geom_text_repel(data=species.long3, aes(x=axis1*1, y=axis2*1, label=labels),
+                    colour="black",  max.overlaps = 40, size = 4, fontface = "italic") +
+    geom_text_repel(data=subset(vectors.long3, vector %in% c("Browsing pressure", "Urchin density")), 
+                    aes(x=axis1*1, y=axis2*1, label=vector),
+                    colour="black", size = 4.5, fontface = "bold", box.padding = 0.6) +
+    coord_fixed(ratio=1)+
+    theme(
+        panel.background = element_blank(),
+        panel.border = element_blank(),
+        panel.grid = element_blank(),
+        axis.line = element_line("gray25"),
+        text = element_text(size = 12),
+        axis.text = element_text(size = 10, colour = "gray25"),
+        axis.title = element_text(size = 14, colour = "gray25"),
+        legend.title = element_text(size = 14),
+        legend.text = element_text(size = 14),
+        legend.key = element_blank())+
+  guides(col=guide_legend("Management"))
+ggsave("Correlations_Ordination.tiff", width = 18, height = 18, units = "cm", dpi=1200, compression = "lzw")
+
+```
+

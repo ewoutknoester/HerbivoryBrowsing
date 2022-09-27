@@ -5,8 +5,6 @@ date: "26/05/2022"
 output: html_document
 ---
 
-# TO DO: ANOVAS total fish biomass, herbivores, coral cover, macroalgae, urchins
-
 # Setup
 ```{r setup, include=FALSE}
 
@@ -14,6 +12,7 @@ rm(list=ls()) # Clear workspace
 knitr::opts_knit$set(root.dir = '/tmp') #Set directory at current directory for all subsequent chunks
 options(scipen = 100) # Remove scientific notation
 
+library(car) # Anova
 library(readxl) # Import excel sheets
 library(writexl)
 library(tidyverse) # Data manipulation and plotting
@@ -44,7 +43,6 @@ data_summary <- function(data, varname, groupnames){
 }
 ```
 
-
 # Data selection (preparing dataset for archiving & sharing)
 ```{r data selection}
 
@@ -63,17 +61,20 @@ df1.clean <- as.data.frame(long_panel(df1.clean, prefix = "_", begin = 1, end = 
 
 ### Sort by survey
 df1.clean <- df1.clean[order(df1.clean$wave),]
+df1.clean$Species <- gsub("[[:punct:]]", "", df1.clean$Species) # Remove points from sp.
 
 # GROUPING data (functional groups)
 ## Load Excel
-fg <- read_excel("Raw data/SpeciesList_2022-06.xlsx")
-fg <- select(fg, c('Species', 'Diet', 'DietH'))
+fg <- read_excel("Raw data/SpeciesList_2022-08.xlsx")
+fg <- select(fg, c('Species', 'a', 'b', 'Diet', 'DietH'))
+fg$Species <- gsub("[[:punct:]]", "", fg$Species) # Remove points from sp.
 
 ## Merge functional groups with data
 df1.clean <- left_join(df1.clean, fg, by="Species")
 
 ### Remove unused columns
-df1.clean <- select(df1.clean, -c('Herbivoreskgha':'Piscivoreskgha'))
+df1.clean <- df1.clean %>% drop_na(c("Diet")) # Remove blank species
+df1.clean <- select(df1.clean, -c('TOT':'TOTg', 'Herbivoreskgha':'Piscivoreskgha')) # Remove pre-calculations
 
 # META data
 ## Load Excel
@@ -82,33 +83,60 @@ meta$Comments[is.na(meta$Comments)] <- ""
 
 # Select from df1.clean dataframe using meta dataframe criteria
 df2.selex <- df1.clean[df1.clean$wave %in% c(unlist(meta[str_detect(meta$Comments, "Herbivory browsing"),1])), ]
-df2.selex <- select(df2.selex, -c('id'))
+df2.selex <- df2.selex[df2.selex$Coloured == 12, ] # Remove non-instantaneous data (colored Excel cells)
+df2.selex <- select(df2.selex, -c('id', 'Coloured'))
 names(df2.selex)[names(df2.selex) == "wave"] <- "Survey"
+df2.selex[is.na(df2.selex)] <- 0
+
+# Wide to long for biomass calculations
+df2.selex <- reshape2::melt(df2.selex, id.vars=c('Survey', 'Species', 'Diet', 'DietH', 'a', 'b'),                         measure.vars = c('c1', 'c2', 'c3', 'c4', 'c5', 'c6', 'c7', 'c8', 'c9', 'c10', 'c11', 'c12'),
+             variable.name = 'SizeClass', value.name = 'Abundance')
+
+# Transform size classes back to numeric (mid size class)
+df2.selex$SizeClass <- ifelse(df2.selex$SizeClass == "c1", 1.25,
+                         ifelse(df2.selex$SizeClass == "c2", 3.75,
+                         ifelse(df2.selex$SizeClass == "c3", 6.25,
+                         ifelse(df2.selex$SizeClass == "c4", 8.75,
+                         ifelse(df2.selex$SizeClass == "c5", 12.5,
+                         ifelse(df2.selex$SizeClass == "c6", 17.5,
+                         ifelse(df2.selex$SizeClass == "c7", 25,
+                         ifelse(df2.selex$SizeClass == "c8", 35,
+                         ifelse(df2.selex$SizeClass == "c9", 45,
+                         ifelse(df2.selex$SizeClass == "c10", 75,
+                         ifelse(df2.selex$SizeClass == "c11", 125,
+                         ifelse(df2.selex$SizeClass == "c12", 175, 0))))))))))))
 
 # Also perform selection on meta
 meta_herbivory.browsing <- meta[str_detect(meta$Comments, "Herbivory browsing"),]
+meta_herbivory.browsing <- select(meta_herbivory.browsing, c('Location','Survey', 'Area')) # Relevant meta
 
 # Merge RAW and META
-meta <- select(meta, c('Survey', 'Date', 'Location')) # Relevant meta
-df2.selex <- left_join(df2.selex, meta, by = "Survey") # Merge by Survey number
+df2.selex <- left_join(df2.selex, meta_herbivory.browsing, by = "Survey")
+
+# Calculate biomass              
+df2.selex$Biomass.kgha <- ((((df2.selex$a * (df2.selex$SizeClass ^ df2.selex$b)) * df2.selex$Abundance)/ df2.selex$Area)/1000)* 10000
+
+# Set factors
+df2.selex$Location <- as.factor(ifelse(df2.selex$Location  == 'Firefly', 1,
+                  ifelse(df2.selex$Location  == 'Pilli Pipa', 2, 
+                   ifelse(df2.selex$Location  == 'Lower Mpunguti', 3, 
+                    ifelse(df2.selex$Location  == 'Dolphin Point', 4, 
+                     ifelse(df2.selex$Location  == 'Wasini', 6, 5))))))
 
 # EXPORT DATA SELECTION
 write_xlsx(df2.selex,"Fish surveys_DATABASE_2017-2018_Herbivory browsing.xlsx")
 
 ```
 
+# Data prep
+```{r data prep}
 
-```{r data loading}
-
+# ---- DATA PREP ----
+## Load data
 df0.clean <- read_excel("Fish surveys_DATABASE_2017-2018_Herbivory browsing.xlsx", sheet = 1)
 
-# Set factors
-df0.clean$Location <- as.factor(ifelse(df0.clean$Location  == 'Firefly', 1,
-                  ifelse(df0.clean$Location  == 'Pilli Pipa', 2, 
-                   ifelse(df0.clean$Location  == 'Lower Mpunguti', 3, 
-                    ifelse(df0.clean$Location  == 'Dolphin Point', 4, 
-                     ifelse(df0.clean$Location  == 'Wasini', 6, 5))))))
-
+## Set factors
+### Set Protection based on Study site
 df0.clean$Protection <- as.factor(ifelse(df0.clean$Location  == 1, "Fished",
                   ifelse(df0.clean$Location  == 2, "Fished", 
                    ifelse(df0.clean$Location  == 3, "Reserve", 
@@ -116,95 +144,159 @@ df0.clean$Protection <- as.factor(ifelse(df0.clean$Location  == 1, "Fished",
                      ifelse(df0.clean$Location  == 5, "No-take", "No-take"))))))
 df0.clean$Protection <- factor(df0.clean$Protection, ordered = TRUE, levels = c("Fished", "Reserve", "No-take"))
 
-df0.clean$Survey <- as.factor(df0.clean$Survey)
-df0.clean$Species <- as.factor(df0.clean$Species)
-df0.clean$Diet <- as.factor(df0.clean$Diet)
-df0.clean$Location <- as.factor(df0.clean$Location)
-df0.clean$DietH <- as.factor(df0.clean$DietH)
-df0.clean$DietH <- factor(df0.clean$DietH, ordered = TRUE, levels = c("Browsers", "Grazers", "Scrapers", "Excavators", "Territorial damselfish"))
+### Get Genus from Species names
 df0.clean <- as.data.frame(append(df0.clean, list(Genus = word(df0.clean$Species, 1)), after = 2))
-df0.clean$Genus <- as.factor(df0.clean$Genus)
 
-# Transform weights per survey to biomass in kg/ha
-df0.clean$TOTg <- ((df0.clean$TOTg/1000)/(pi*7.5^2))*10000
-names(df0.clean)[names(df0.clean) == "TOTg"] <- "Biomass.kgha"
+### Set all to factors
+tofactors <- c('Location', 'Survey', 'Species', 'Genus', 'Diet', 'DietH') 
+df0.clean[tofactors] <- lapply(df0.clean[tofactors], factor)
 
-# Subsets
-df1.sizes <- select(df0.clean, c(1:16, 32, 34, 35))
+### Order by Diet
+df0.clean$DietH <- factor(df0.clean$DietH, ordered = TRUE, levels = c("Browsers", "Grazers", "Scrapers", "Excavators", "Territorial damselfish"))
 
-df1.bm <- select(df0.clean, c(1, 2, 3, 16, 29, 32, 34, 35))
-df1.bm <- subset(df1.bm, DietH !="Other")
+# ---- SUMMARIES -----
+## Subset herbivores only
+df1.bm <- df0.clean %>% drop_na(c("DietH"))
+df1.bm <- select(df1.bm, -c("a", "b", "Area")) # Remove unused columns
 
-# Summaries
-## Herbivores per location per diet per genus
-### Fish first sum per survey per genus
+## ==== BY LOCATION ====
+### #### BY GENUS ####
+### Herbivores per location per diet per genus
+#### Fish first sum per survey per genus
 df2.bm.sur <- ddply(df1.bm, ~Protection+Location+Survey+DietH+Genus, summarise,
                Biomass.sur = sum(Biomass.kgha))
 
-### Then average per location per diet per genus
+#### Then average per location per diet per genus
 df2.bm.loc <- ddply(df2.bm.sur, ~Protection+Location+DietH+Genus, summarise,
                Biomass.loc = mean(Biomass.sur))
 
-### Remove genera that are not observed in any survey
+#### Remove genera that are not observed in any survey
 df2.bm.loc$Genus <- droplevels(df2.bm.loc$Genus)
-df2.bm.gen <- ddply(df2.bm.loc, ~Genus, summarise,
-               Biomass.gen = mean(Biomass.loc))
-df2.bm.gen$Genus <- as.character(ifelse(df2.bm.gen$Biomass.gen < 1.5, "Other", as.character(df2.bm.gen$Genus)))
 
+#### Average per genus
+df2.bm.gen <- ddply(df2.bm.loc, ~Genus, summarise, Biomass.gen = mean(Biomass.loc))
+
+##### Set genera contributing less than 2 kg/ha on average to group 'Other'
+df2.bm.gen$Genus <- as.character(ifelse(df2.bm.gen$Biomass.gen < 2, "Other", as.character(df2.bm.gen$Genus)))
+
+##### Adjust genera for Location data frame as well 
 df2.bm.loc <- df2.bm.loc[order(df2.bm.loc$Genus),]
 df2.bm.loc <- df2.bm.loc[order(df2.bm.loc$Location),]
 df2.bm.loc$Genus <- as.character(df2.bm.loc$Genus)
 df2.bm.loc$Genus <- df2.bm.gen$Genus
 
-df2.bm.loc <- ddply(df2.bm.loc, ~Protection+Location+DietH+Genus, summarise,
-               Biomass.loc = mean(Biomass.loc))
-df2.bm.loc$Genus <- factor(df2.bm.loc$Genus, ordered = TRUE, levels = c("Calotomus", "Kyphosus", "Naso", "Platax", "Siganus",
-                                                             "Acanthurus", "Centropyge", "Ctenochaetus", "Zebrasoma",
-                                                             "Hipposcarus", "Scarus",
-                                                             "Cetoscarus", "Chlorurus",
-                                                             "Amblyglyphidodon", "Plectroglyphidodon", "Stegastes",
-                                                             "Other"))
+##### Average again, so group 'Other' becomes pooled
+df2.bm.loc <- ddply(df2.bm.loc, ~Protection+Location+Genus, summarise,
+               Biomass.loc = sum(Biomass.loc))
 
-## Herbivores per location (all herbivores summed)
-### Fish first sum per survey
+##### Set genera ordering
+df2.bm.loc$Genus <- factor(df2.bm.loc$Genus, ordered = TRUE,
+                           levels = c("Kyphosus", "Naso", "Platax", "Siganus",
+                                      "Acanthurus", "Centropyge", "Ctenochaetus",
+                                      "Hipposcarus", "Scarus",
+                                      "Cetoscarus", "Chlorurus",
+                                      "Amblyglyphidodon", "Plectroglyphidodon", "Stegastes",
+                                      "Other"))
+
+### #### BY TOTAL BIOMASS ####
+### Herbivores per location (all herbivores summed)
+#### Fish first sum per survey
 df2.bm.sur.herb <- ddply(df1.bm, ~Protection+Location+Survey, summarise,
                Biomass.herb = sum(Biomass.kgha))
 
-### Then average per location
+## Roving herbivores per location (excluding territorial damselfish)
+#df1.bm.nd <- subset(df1.bm, DietH != "Territorial damselfish")
+#df2.bm.sur.herb.nd <- ddply(df1.bm.nd, ~Protection+Location+Survey, summarise, Biomass.herb = sum(Biomass.kgha))
+
+#### Then average per location
 df2.bm.loc.herb <- ddply(df2.bm.sur.herb, ~Protection+Location, summarise,
-               Biomass.loc.herb = mean(Biomass.herb), n = length(Biomass.herb), se = sd(Biomass.herb)/sqrt(n))
+          Biomass.loc.herb = mean(Biomass.herb), n = length(Biomass.herb), se = sd(Biomass.herb)/sqrt(n))
+
+## ==== BY PROTECTION ====
+### #### BY GENUS ####
+### Herbivores per location per diet per genus
+#### Fish first sum per survey per genus
+df2.bm.sur.P <- ddply(df1.bm, ~Protection+Survey+DietH+Genus, summarise,
+               Biomass.sur = sum(Biomass.kgha))
+
+#### Then average per location per diet per genus
+df2.bm.loc.P <- ddply(df2.bm.sur.P, ~Protection+DietH+Genus, summarise,
+               Biomass.loc = mean(Biomass.sur))
+
+#### Remove genera that are not observed in any survey
+df2.bm.loc.P$Genus <- droplevels(df2.bm.loc.P$Genus)
+
+#### Average per genus
+df2.bm.gen.P <- ddply(df2.bm.loc.P, ~Genus, summarise, Biomass.gen = mean(Biomass.loc))
+
+##### Set genera contributing less than 2 kg/ha on average to group 'Other'
+df2.bm.gen.P$Genuso <- as.character(ifelse(df2.bm.gen.P$Biomass.gen < 2, "Other", as.character(df2.bm.gen.P$Genus)))
+
+##### Adjust genera for Location data frame as well 
+df2.bm.loc.P <- left_join(df2.bm.loc.P, df2.bm.gen.P, by = "Genus")
+
+##### Average again, so group 'Other' becomes pooled
+df2.bm.loc.P <- ddply(df2.bm.loc.P, ~Protection+Genuso, summarise,
+               Biomass.loc = sum(Biomass.loc))
+
+##### Set genera ordering
+df2.bm.loc.P$Genus <- factor(df2.bm.loc.P$Genus, ordered = TRUE,
+                           levels = c("Kyphosus", "Naso", "Platax", "Siganus",
+                                      "Acanthurus", "Centropyge", "Ctenochaetus",
+                                      "Hipposcarus", "Scarus",
+                                      "Cetoscarus", "Chlorurus",
+                                      "Amblyglyphidodon", "Plectroglyphidodon", "Stegastes",
+                                      "Other"))
+
+### #### BY TOTAL BIOMASS ####
+### Herbivores per location (all herbivores summed)
+#### Fish first sum per survey
+df2.bm.sur.herb.P <- ddply(df1.bm, ~Protection+Survey, summarise,
+               Biomass.herb = sum(Biomass.kgha))
+
+## Roving herbivores per location (excluding territorial damselfish)
+#df1.bm.nd <- subset(df1.bm, DietH != "Territorial damselfish")
+#df2.bm.sur.herb.nd <- ddply(df1.bm.nd, ~Protection+Location+Survey, summarise, Biomass.herb = sum(Biomass.kgha))
+
+#### Then average per location
+df2.bm.pro.herb <- ddply(df2.bm.sur.herb.P, ~Protection, summarise,
+          Biomass.pro.herb = mean(Biomass.herb), n = length(Biomass.herb), se = sd(Biomass.herb)/sqrt(n))
 
 ```
-
-# Data exploration
-```{r explore}
-
-hist(df2.bm.sur.herb$Biomass.herb)
-hist(sqrt(df2.bm.sur.herb$Biomass.herb))
-hist(log(df2.bm.sur.herb$Biomass.herb))
-hist(log10(df2.bm.sur.herb$Biomass.herb))
-
-```
-
 
 # Model selection
 ```{r SGR: linear model selection}
 
-
-# Prepare data
+# DATA PREP
 model.data <- df2.bm.sur.herb
 
-# Set zero to minimum value
-model.data$Biomass.herb[model.data$Biomass.herb == 0] <- min(model.data$Biomass.herb[model.data$Biomass.herb>0])/2
+## Set zero to minimum value
+#model.data$Biomass.herb[model.data$Biomass.herb == 0] <- min(model.data$Biomass.herb[model.data$Biomass.herb>0])/2
 
-# Model
+## Add ReefType as covariate
+model.data$ReefType <- ifelse(as.numeric(model.data$Location) < 3, "Patch", ifelse(as.numeric(model.data$Location) > 5, "Patch", "Fringe"))
+                           
+
+# LOCATION
+## Model
 glm.1 <- glm(formula = Biomass.herb ~ Location, family  = Gamma(link = "log"), data = model.data)
+
+Anova(glm.1)
+
+# PROTECTION
+## Model
+## ReefType increased AIC by 1, so not included in final model
+glmer.1P <- lme4::glmer(Biomass.herb ~ Protection + (1 | Location), data = model.data, 
+                  family = Gamma(link = "log"))
+
+Anova(glmer.1P)
 
 ```
 
 ## Model validation
 ```{r SGR model validation}
 
+# LOCATION
 mod <- glm.1
 modOutput <- simulateResiduals(fittedModel = mod, plot = F)
 
@@ -217,18 +309,43 @@ abline(0,0)
 plot(fitted(mod) ~ model.data$Biomass.herb)
 par(op)
 
+# PROTECTION
+## Total herbivores
+mod <- glmer.1P
+modOutput <- simulateResiduals(fittedModel = mod, plot = F)
+
+op <- par(mfrow = c(2, 3), mar = c(5, 4, 1, 2))
+plotResiduals(modOutput, quantreg = T, quantiles = 0.5, rank = T, smoothScatter = F)
+testDispersion(modOutput)
+testUniformity(modOutput)
+plot(fitted(mod) ~ model.data$Biomass.herb)
+par(op)
+
 
 ```
-
 
 # Post hoc
 ```{r post hoc}
+# LOCATION
 hsd <- emmeans(glm.1, specs = pairwise ~ Location, adjust = "tukey")
+
+# PROTECTION
+hsd.P <- emmeans(glmer.1P, specs = pairwise ~ Protection, adjust = "tukey", type = "response")
+
 ```
 
-```{r}
-# Stacked bar graph + SE
+# Plots
+```{r plots}
 
+# Genera colours
+gencol <- c("#096400", "#32AB50", "#A1DF56", "#E3F5B5", # Browsers
+            "#040071", "#017CFF", "#88C9F7", # Grazers
+            "#5b1516", "#C91A1D", # Scrapers
+            "#750075", "#C256B8", # Excavators
+            "#F7FF52", "#ADA300", # Territorial damselfish
+            "#E5E5E5") # Other
+
+# LOCATION Stacked bar graph + SE
 # Post hoc letters
 sigletters.loc <- multcomp::cld(hsd$emmeans, alpha = 0.05, Letters = letters, decreasing = T) # get CLD
 
@@ -239,20 +356,15 @@ sigletters.loc <- sigletters.loc %>% mutate(.group = str_squish(.group)) # remov
 # Merge sig.letter dataframe into the summary dataframe
 df2.bm.loc.herb <- cbind(df2.bm.loc.herb, siglet.loc = sigletters.loc$.group)
 
+# Add stats
 df2.bm.loc.SE <- cbind(df2.bm.loc, se.loc = df2.bm.loc.herb$se)
 df2.bm.loc.SE <- cbind(df2.bm.loc.SE, sum.tot = df2.bm.loc.herb$Biomass.loc.herb)
 df2.bm.loc.SE <- cbind(df2.bm.loc.SE, siglet = df2.bm.loc.herb$siglet.loc)
 
-df2.bm.loc.SE$se.loc <- as.numeric(ifelse(df2.bm.loc.SE$DietH  == 'Browsers' & df2.bm.loc.SE$Genus == "Naso", df2.bm.loc.SE$se.loc, ""))
-df2.bm.loc.SE$sum.tot <- as.numeric(ifelse(df2.bm.loc.SE$DietH  == 'Browsers' & df2.bm.loc.SE$Genus == "Naso", df2.bm.loc.SE$sum.tot, ""))
-df2.bm.loc.SE$siglet <- ifelse(df2.bm.loc.SE$DietH  == 'Browsers' & df2.bm.loc.SE$Genus == "Naso", df2.bm.loc.SE$siglet, "")
-
-gencol <- c("#096400", "#32AB50", "#A1DF56", "#E3F5B5", # Browsers
-            "#040071", "#017CFF", "#88C9F7", # Grazers
-            "#5b1516", "#C91A1D", # Scrapers
-            "#750075", # Excavators
-            "#F7FF52", "#ADA300", # Territorial damselfish
-            "#E5E5E5") # Other
+# Keep single copy of stats
+df2.bm.loc.SE$se.loc <- as.numeric(ifelse(df2.bm.loc.SE$Genus == "Naso", df2.bm.loc.SE$se.loc, ""))
+df2.bm.loc.SE$sum.tot <- as.numeric(ifelse(df2.bm.loc.SE$Genus == "Naso", df2.bm.loc.SE$sum.tot, ""))
+df2.bm.loc.SE$siglet <- ifelse(df2.bm.loc.SE$Genus == "Naso", df2.bm.loc.SE$siglet, "")
 
 p1SE <- ggplot(df2.bm.loc.SE) +  
   geom_bar(position = "stack", stat = "identity", aes(x = Location, y = Biomass.loc, fill=Genus))+
@@ -265,7 +377,7 @@ p1SE <- ggplot(df2.bm.loc.SE) +
   theme_economist()+scale_colour_economist()+
   labs(x = "Study site", y = expression(paste("Biomass (kg ", ha^-1,")")))+
   scale_x_discrete(expand = c(0, 0.7))+
-  scale_y_continuous(expand = c(0, 0), limits = c(0, 600))+
+  scale_y_continuous(expand = c(0, 0), limits = c(0, 800))+
   theme(
     panel.margin.y = unit(0, "cm"),
     strip.text.x = element_text(size = 14, face = "bold", vjust = 2, margin = margin(0.2, 0, 0.1, 0, "cm")),
@@ -285,8 +397,8 @@ p1SE <- ggplot(df2.bm.loc.SE) +
     legend.margin = unit(c(10,0,10,0), "cm"))
     
 # Create dataframe for legend    
-dt <- data.table(x = 1, y = seq(1, 13, 1), z = factor(1:13))
-dt[ , grp := cut(as.numeric(z), breaks = c(0, 1, 3, 4, 6, 9, 13),
+dt <- data.table(x = 1, y = seq(1, 14, 1), z = factor(1:14))
+dt[ , grp := cut(as.numeric(z), breaks = c(0, 1, 3, 5, 7, 10, 14),
                 labels = c("", "Damselfish", "Excavators", "Scrapers", "Grazers", "Browsers"))]
 dt2 <- dt[ , .(x = 1, y = min(y), yend = max(y), ymid = mean(y)), by = grp]
 dt3 <- data.table(x = 1, y = unlist(dt2[ , .(y, yend)]))
@@ -314,14 +426,97 @@ p2 <- ggplot(mapping = aes(x = x, y = y)) +
   scale_color_manual(values = "", guide = "none") +
   scale_x_continuous(limits = c(1.2, 2))+
   theme_void()+
-  theme(plot.margin = unit(c(0.3,0,0.1,0), "cm"))
-
+  theme(plot.margin = unit(c(-0,0,-0.2,0), "cm"))
 
 plot_grid(p1SE, plot_grid(NULL, p2, NULL, nrow = 3, rel_heights = c(1, 5, 1)), rel_widths = c(6, 1))
 
-ggsave("Herbivores by genus and diet_SE.tiff", width = 23, height = 11, units = "cm", dpi=1200, compression = "lzw")
+ggsave("Site anovas_Herbivores by genus and diet_Location.tiff", width = 23, height = 11, units = "cm", dpi=1200, compression = "lzw")
 
+# PROTECTION Stacked bar graph + SE
+# Post hoc letters
+sigletters.loc.P <- multcomp::cld(hsd.P$emmeans, alpha = 0.05, Letters = letters, decreasing = T) # get CLD
 
+# Make order match with summary dataframe
+sigletters.loc.P <- sigletters.loc.P[order(sigletters.loc.P$Protection),]
+sigletters.loc.P <- sigletters.loc.P %>% mutate(.group = str_squish(.group)) # remove white spaces
+
+# Merge sig.letter dataframe into the summary dataframe
+df2.bm.pro.herb.fig <- cbind(df2.bm.pro.herb, siglet.loc = sigletters.loc.P$.group)
+
+# Add stats to genus data frame
+df2.bm.pro.SE <- cbind(df2.bm.loc.P, se.loc = df2.bm.pro.herb.fig$se)
+df2.bm.pro.SE <- cbind(df2.bm.pro.SE, sum.tot = df2.bm.pro.herb.fig$Biomass.pro.herb)
+df2.bm.pro.SE <- cbind(df2.bm.pro.SE, siglet = df2.bm.pro.herb.fig$siglet.loc)
+
+# Keep single copy for stats 
+df2.bm.pro.SE$se.loc <- as.numeric(df2.bm.pro.SE$Genus == "Naso", df2.bm.pro.SE$se.loc, "")
+df2.bm.pro.SE$sum.tot <- as.numeric(df2.bm.pro.SE$Genus == "Naso", df2.bm.pro.SE$sum.tot, "")
+df2.bm.pro.SE$siglet <- ifelse(df2.bm.pro.SE$Genus == "Naso", df2.bm.pro.SE$siglet, "")
+
+p1SE <- ggplot(df2.bm.pro.SE) +  
+  geom_bar(position = "stack", stat = "identity", aes(x = Protection, y = Biomass.loc, fill=Genus))+
+  geom_errorbar(data=df2.bm.pro.herb.fig, aes(x = Protection, ymin=Biomass.pro.herb, ymax=Biomass.pro.herb+(1*se)), width=.2, size = 1, position=position_dodge(.9))+
+  geom_text(data = df2.bm.pro.herb.fig, aes(x=Protection, y = Biomass.pro.herb + (1*se), label = siglet.loc), 
+            vjust= -0.8, hjust = 0.5, size = 5, fontface = "bold", position=position_dodge(.9))+
+  geom_bar(data=df2.bm.pro.herb.fig,stat = "identity", aes(x = Protection, y = Biomass.pro.herb), alpha=0, size=1, color="black")+
+  scale_fill_manual("Genus" , values = gencol)+
+  theme_economist()+scale_colour_economist()+
+  labs(x = "Study site", y = expression(paste("Biomass (kg ", ha^-1,")")))+
+  scale_x_discrete(expand = c(0, 0.7))+
+  scale_y_continuous(expand = c(0, 0), limits = c(0, 600))+
+  theme(
+    panel.margin.y = unit(0, "cm"),
+    strip.text.x = element_text(size = 14, face = "bold", vjust = 2, margin = margin(0.2, 0, 0.1, 0, "cm")),
+    strip.background = element_blank(),
+    legend.position = "right",
+    legend.title = element_text(size = 12, face = "bold", hjust = 0.3),
+    legend.text = element_text(size = 11.5, face = "italic"),
+    legend.key.size = unit(1.1, "lines"),
+    axis.title.x = element_text(size = 14, vjust = -2),
+    axis.text.x = element_text(size = 12, face = "bold", vjust = 0.5),
+    axis.title.y = element_text( size = 14, vjust = 4),
+    axis.text.y = element_text(size = 12, face = "bold", vjust = 0.4),
+    panel.background = element_rect(fill = "#FCFCFC"),
+    plot.background = element_rect(fill = "#FFFFFF"),
+    panel.grid.major = element_line(colour = "#FFFFFF", size = 1),
+    axis.ticks = element_blank(),
+    legend.margin = unit(c(10,0,10,0), "cm"))
+    
+# Create dataframe for legend    
+dt <- data.table(x = 1, y = seq(1, 14, 1), z = factor(1:14))
+dt[ , grp := cut(as.numeric(z), breaks = c(0, 1, 3, 5, 7, 10, 14),
+                labels = c("", "Damselfish", "Excavators", "Scrapers", "Grazers", "Browsers"))]
+dt2 <- dt[ , .(x = 1, y = min(y), yend = max(y), ymid = mean(y)), by = grp]
+dt3 <- data.table(x = 1, y = unlist(dt2[ , .(y, yend)]))
+v <- 0.3 # offset
+
+p2 <- ggplot(mapping = aes(x = x, y = y)) +
+  geom_point(data = dt, size = 5)+
+  geom_segment(data = dt2, aes(x = x + v, xend = x + v, yend = yend),
+               colour = c("#FFFFFF", "#D1DA16", "#9A009A", "#B60306", "#006BDC", "#00A747"), size = 1)+
+  geom_segment(data = dt3, aes(x = x + v, xend = x + (v - 0.1), yend = y), size = 1, 
+    colour=c("#FFFFFF", # NA (Other floor)
+             "#D1DA16", # Damsel floor
+             "#9A009A", # Excavator floor
+             "#B60306", # Scraper floor
+             "#006BDC", # Grazer floor
+             "#00A747", # Browser floor
+             "#FFFFFF", # Other (ceiling)
+             "#D1DA16", # Damsel ceiling
+             "#9A009A", # Excavator ceiling
+             "#B60306", # Scraper ceiling
+             "#006BDC", # Grazer ceiling
+             "#00A747"))+ # Browser ceiling
+  geom_text(data = dt2, aes(x = x + v + 0.4, y = ymid, label = grp),
+    colour = c("#959595", "#D1DA16", "#9A009A", "#B60306", "#006BDC", "#00A747"), size = 4, fontface = "bold", vjust = 0.3)+
+  scale_color_manual(values = "", guide = "none") +
+  scale_x_continuous(limits = c(1.2, 2))+
+  theme_void()+
+  theme(plot.margin = unit(c(-0.6,0,-0.1,0), "cm"))
+
+plot_grid(p1SE, plot_grid(NULL, p2, NULL, nrow = 3, rel_heights = c(1, 4, 1)), rel_widths = c(5.5, 1))
+
+ggsave("Site anovas_Herbivores by genus and diet_Protection.tiff", width = 23, height = 11, units = "cm", dpi=1200, compression = "lzw")
 
 ```
 

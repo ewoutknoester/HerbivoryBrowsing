@@ -49,7 +49,6 @@ Data info:
   After correction with Weight_control, grazing > 100 was set to 100 and grazing < 0 was set to 0
   ~1 day interval between measurement Weight(out) and Weight(in), standardized to 24hrs exactly
 -->
-
 ```{r data loading}
 # Load data and assign factors
 Assays <- read.csv("Macrophyte buffet assays_Herbivory browsing.csv", 
@@ -123,11 +122,22 @@ Data observations:
   Full nested model (Location/Assay) could not be fitted properly (archive)
   A pooling across Assays (i.e. average of 10 lines) was used for analysis, and this was nested within Location
 -->
-
 ## Pooled*Nested model (Protection) selection
 ```{r pooled*nested model (protection) selection}
 
 # --- PROTECTION ---
+
+## Data prep: add depth as covariate
+Assays.avg$Depth <- ifelse(Assays.avg$Location == 1, 2.4,
+                    ifelse(Assays.avg$Location == 2, 5.5,
+                    ifelse(Assays.avg$Location == 3, 4.7,
+                    ifelse(Assays.avg$Location == 4, 8.4,
+                    ifelse(Assays.avg$Location == 5, 10.2,
+                    ifelse(Assays.avg$Location == 6, 3.2, 99))))))
+
+## Add ReefType as covariate
+Assays.avg$ReefType <- ifelse(as.numeric(Assays.avg$Location) < 3, "Patch", ifelse(as.numeric(Assays.avg$Location) > 5, "Patch", "Fringe"))
+                           
 # Null model
 glm.null <- glmmTMB(Grazing.scaled ~ 1, data = Assays.avg, family = list(family = "beta", link = "logit"))
 
@@ -158,6 +168,7 @@ glm.2f <- glmmTMB(Grazing.scaled ~ Protection*Species + (1 | Location/Assay), da
 AIC(glm.1b, glm.2a, glm.2b, glm.2c, glm.2d, glm.2e, glm.2f) # Species + Protection (glm.2e) best fit (without convergence problems)
 
 # Final model for pooled*nested data, including interaction and variable precision:
+## Including ReefType didn't change AIC (dif < 0.1) thus left out of final model
 glm.3 <- glmmTMB(Grazing.scaled ~ Protection*Species + (1 | Location/Assay), data = Assays.avg, 
                   family = list(family = "beta", link = "logit"), dispformula = ~ Species+Protection)
 
@@ -167,6 +178,8 @@ car::Anova(glm.3)
 # --- LOCATION ---
 glm.3loc <- glmmTMB(Grazing.scaled ~ Location*Species + (1 | Assay), data = Assays.avg, 
                   family = list(family = "beta", link = "logit"), dispformula = ~ Species+Protection)
+
+car::Anova(glm.3loc)
 
 ```
 
@@ -200,7 +213,6 @@ plotResiduals(modOutput, form = Assays.avg$Species)
 abline(0,0)
 plot(fitted(mod) ~ Assays.avg$Grazing.scaled)
 par(op)
-
 
 ```
 
@@ -262,7 +274,7 @@ ggplot(summaryx, aes(x = Protection, fill = Protection, y = Grazing.scaled))+
     plot.background = element_rect(fill = "#FFFFFF"),
     panel.grid.major = element_line(colour = "#797979", size = 0.3)
     ) 
-ggsave("Grazing Both (Protection).tiff", width = 23, height = 11, units = "cm", dpi=1200, compression = "lzw")
+ggsave("Herbivory_Grazing Both (Protection).tiff", width = 23, height = 11, units = "cm", dpi=1200, compression = "lzw")
 
 ## Thalassia
 
@@ -308,7 +320,7 @@ ggplot(summaryxT, aes(x = Protection, fill = Protection, y = Grazing.scaled))+
     plot.background = element_rect(fill = "#FFFFFF"),
     panel.grid.major = element_line(colour = "#797979", size = 0.3)
     ) 
-ggsave("Grazing Thalassia (Protection).tiff", width = 23, height = 11, units = "cm", dpi=1200, compression = "lzw")
+ggsave("Herbivory_Grazing Thalassia (Protection).tiff", width = 23, height = 11, units = "cm", dpi=1200, compression = "lzw")
 
 ### --- LOCATION
 ## SARGASSUM & PADINA
@@ -355,7 +367,7 @@ ggplot(summaryx.loc, aes(x = Location, fill = Protection, y = Grazing.scaled))+
     plot.background = element_rect(fill = "#FFFFFF"),
     panel.grid.major = element_line(colour = "#797979", size = 0.3)
     ) 
-ggsave("Grazing Both (Location).tiff", width = 23, height = 11, units = "cm", dpi=1200, compression = "lzw")
+ggsave("Herbivory_Grazing Both (Location).tiff", width = 23, height = 11, units = "cm", dpi=1200, compression = "lzw")
 
 ```
 
