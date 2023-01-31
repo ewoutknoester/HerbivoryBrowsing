@@ -101,22 +101,24 @@ species <- ordid[,1:(ncol(ordid)-2)]/ordid[,ncol(ordid)]
 Averages.avg <- read_excel("Correlations.xlsx", sheet = 1)
 Averages.avg$Protection <- ordered(Averages.avg$Protection, levels = c("Fishing", "Reserve", "No-take"))
 
-environment <- select(Averages.avg, c( "Protection", "Grazing", "sd", "Hard.coral.avg",
-                                    "Macroalgae.avg", "Urchins.avg", "Urchins.sd"))
+
 
 ```
 
 # Ordination
 ```{r ordination}
 
+environment <- select(Averages.avg, c( "Protection", "Grazing", "sd", "Hard.coral.avg",
+                                    "Macroalgae.avg", "Urchins.avg", "Urchins.sd"))
+
 # z-score transformation
 environment$Grazing <- decostand(environment$Grazing, method = "standardize")
 environment$Urchins.avg <- decostand(environment$Urchins.avg, method = "standardize")
 
-# When ReefType included, not significant (df =  1, SumOfSqs = 0.2748, F = 1.6675, p = 0.13889)
-## ordid <- add_column(ordid, ReefType = "", .after = 1)
-## ordid$ReefType <- ifelse(as.numeric(ordid$Location) < 3, "Patch", ifelse(as.numeric(ordid$Location) > 5, "Patch", "Fringe"))
-## ordid$ReefType <- as.factor(ordid$ReefType)
+# When ReefType included, not significant (df =  1, SumOfSqs = 0.26040, F = 1.5455, p = 0.23611 )
+ ##environment <- add_column(environment, ReefType = "", .after = 1)
+ ##environment$ReefType <- c("Patch", "Patch", "Fringing", "Fringing", "Fringing", "Patch")
+ ##environment$ReefType <- as.factor(environment$ReefType)
 
 # db-RDA
 dbRDA = capscale(species ~ Protection+Grazing+Urchins.avg, environment, dist="bray")

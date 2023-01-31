@@ -279,17 +279,26 @@ model.data$ReefType <- ifelse(as.numeric(model.data$Location) < 3, "Patch", ifel
 
 # LOCATION
 ## Model
+## Adding ReefType can't work on Location level, because confounded?
 glm.1 <- glm(formula = Biomass.herb ~ Location, family  = Gamma(link = "log"), data = model.data)
 
 Anova(glm.1)
 
 # PROTECTION
 ## Model
-## ReefType increased AIC by 1, so not included in final model
+## model.data$Protection <- factor(model.data$Protection, ordered = F) # To get propel model output
 glmer.1P <- lme4::glmer(Biomass.herb ~ Protection + (1 | Location), data = model.data, 
                   family = Gamma(link = "log"))
 
+glmer.1P.rt <- lme4::glmer(Biomass.herb ~ Protection + ReefType + (1 | Location), data = model.data, 
+                  family = Gamma(link = "log"))
+Anova(glmer.1P.rt)
+summary(glmer.1P.rt)
+
+AIC(glmer.1P, glmer.1P.rt) # ReefType increases AIC by 1, so not included in final model
+
 Anova(glmer.1P)
+summary(glmer.1P)
 
 ```
 

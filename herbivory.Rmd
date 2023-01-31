@@ -168,11 +168,18 @@ glm.2f <- glmmTMB(Grazing.scaled ~ Protection*Species + (1 | Location/Assay), da
 AIC(glm.1b, glm.2a, glm.2b, glm.2c, glm.2d, glm.2e, glm.2f) # Species + Protection (glm.2e) best fit (without convergence problems)
 
 # Final model for pooled*nested data, including interaction and variable precision:
-## Including ReefType didn't change AIC (dif < 0.1) thus left out of final model
 glm.3 <- glmmTMB(Grazing.scaled ~ Protection*Species + (1 | Location/Assay), data = Assays.avg, 
                   family = list(family = "beta", link = "logit"), dispformula = ~ Species+Protection)
 
 summary(glm.3)
+
+glm.3rt <- glmmTMB(Grazing.scaled ~ Protection*Species + ReefType + (1 | Location/Assay), data = Assays.avg, 
+                  family = list(family = "beta", link = "logit"), dispformula = ~ Species+Protection)
+
+summary(glm.3rt)
+
+AIC(glm.3, glm.3rt) ## Including ReefType didn't change AIC (dif < 0.1) thus left out of final model
+
 car::Anova(glm.3)
 
 # --- LOCATION ---
